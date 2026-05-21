@@ -1,0 +1,132 @@
+/* ── Tags ── */
+.tagrow { display: flex; flex-wrap: wrap; gap: 7px; }
+.tag {
+  padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border2); background: var(--bg);
+  font-size: 10px; font-family: var(--mono);
+  color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em;
+}
+
+/* ── Summary bar ── */
+.summary {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 1px; background: var(--border);
+  border-top: 1px solid var(--border);
+}
+.summary .cell { background: var(--surface); padding: 13px 16px; }
+.summary .lbl { font-size: 10px; color: var(--text3); font-family: var(--mono); text-transform: uppercase; }
+.summary .val { margin-top: 4px; font-size: 20px; font-family: var(--mono); font-weight: 700; }
+
+/* ── Alerts ── */
+.alert {
+  padding: 10px 14px; border-radius: 8px;
+  font-size: 12px; font-family: var(--mono);
+  display: none; margin-bottom: 12px;
+}
+.alert.show { display: block; }
+.alert.warn { background: var(--yellow-dim); border: 1px solid rgba(245,201,66,0.3); color: var(--yellow); }
+.alert.danger { background: rgba(232,83,58,0.1); border: 1px solid rgba(232,83,58,0.3); color: var(--accent); }
+
+/* ── Table ── */
+table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 13px; }
+th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+th { text-align: left; color: var(--text3); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+.param { color: var(--blue); font-weight: 600; }
+
+/* ── SQL code block ── */
+.sql-wrap {
+  background: #050709;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.sql-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 14px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  gap: 8px; flex-wrap: wrap;
+}
+
+.pills { display: flex; gap: 5px; }
+.pill { width: 11px; height: 11px; border-radius: 50%; }
+
+/* ── Action Buttons ── */
+.copy-btn, .download-btn {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  padding: 5px 11px;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 10px; font-weight: 600;
+  cursor: pointer;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+.copy-btn:hover, .download-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 12px rgba(232,83,58,0.25);
+}
+
+/* Botão principal (Conectar, etc.) */
+.copy-btn {
+  border-color: rgba(77,159,255,0.3);
+  color: var(--blue);
+  background: rgba(77,159,255,0.06);
+}
+.copy-btn:hover {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+  box-shadow: 0 0 12px rgba(77,159,255,0.3);
+}
+
+/* ── Log entries ── */
+.log-list { display: flex; flex-direction: column; gap: 10px; }
+.log-entry {
+  border: 1px solid var(--border2); border-left-width: 4px;
+  border-radius: 12px; padding: 12px;
+  background: rgba(255,255,255,0.015);
+}
+.log-entry-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+}
+.log-badge {
+  font-size: 10px; font-weight: 800; letter-spacing: .08em;
+  padding: 4px 8px; border-radius: 999px;
+  background: rgba(255,255,255,.05);
+  font-family: var(--mono); text-transform: uppercase;
+}
+.log-success { border-left-color: var(--green); }
+.log-warning { border-left-color: var(--yellow); }
+.log-error { border-left-color: var(--oracle); }
+.log-sql {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  max-height: 180px; overflow: auto;
+  background: #0b0d11; border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px;
+  color: var(--text); font-family: var(--mono); font-size: 12px;
+}
+
+/* ── Note variants ── */
+.note.success { border-left: 3px solid var(--green); }
+.note.error   { border-left: 3px solid var(--oracle); }
+.note.warning { border-left: 3px solid var(--yellow); }
+
+/* ── Inline checkbox ── */
+.check-label {
+  display: flex; gap: 8px; align-items: center;
+  font-family: var(--mono); font-size: 12px;
+  color: var(--text2); cursor: pointer;
+  user-select: none;
+}
+.check-label input[type="checkbox"] {
+  width: 15px; height: 15px; cursor: pointer;
+  accent-color: var(--blue);
+}

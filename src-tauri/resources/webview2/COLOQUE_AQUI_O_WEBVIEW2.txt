@@ -1,0 +1,9 @@
+Coloque aqui o arquivo oficial da Microsoft com exatamente este nome:
+
+MicrosoftEdgeWebView2RuntimeInstallerX64.exe
+
+Download oficial: página Microsoft Edge WebView2 Runtime, opção Evergreen Standalone Installer x64.
+
+Depois rode:
+
+npm run tauri:build

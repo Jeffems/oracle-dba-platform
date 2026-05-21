@@ -1,0 +1,65 @@
+{
+  "name": "oracle-dba-desktop-jsanchina",
+  "version": "1.2.0",
+  "description": "Oracle DBA Desktop",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win nsis",
+    "dist:portable": "electron-builder --win portable",
+    "dist:all": "electron-builder --win portable nsis",
+    "build:portable": "npm run dist:portable",
+    "build:portable:x64": "electron-builder --win portable --x64"
+  },
+  "dependencies": {
+    "oracledb": "^6.3.0"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.jsanchina.oracledbadesktop",
+    "productName": "Oracle DBA Desktop",
+    "copyright": "Copyright © Jeferson Sanchina",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "README-REFATORACAO.txt",
+      "renderer/**/*",
+      "build/*"
+    ],
+    "asar": true,
+    "win": {
+      "icon": "build/icone.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "asarUnpack": [
+      "node_modules/oracledb/**/*"
+    ]
+  }
+}

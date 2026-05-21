@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Oracle DBA Desktop",
+  "version": "2.4.0",
+  "identifier": "com.jsanchina.oracledbadesktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build:app",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Oracle DBA Desktop",
+        "width": 1500,
+        "height": 950,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "../build/icone.ico"
+    ],
+    "resources": [
+      "resources/oracle-bridge",
+      "resources/webview2"
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/webview2-hooks.nsi",
+        "installMode": "both",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

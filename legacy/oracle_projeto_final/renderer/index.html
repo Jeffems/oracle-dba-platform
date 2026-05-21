@@ -1,0 +1,1351 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Oracle DBA</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Syne:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="stylesheet" href="./assets/css/base.css" />
+    <link rel="stylesheet" href="./assets/css/layout.css" />
+    <link rel="stylesheet" href="./assets/css/components.css" />
+    <link rel="stylesheet" href="./assets/css/modules.css" />
+  </head>
+  <body>
+    <header>
+      <div class="logo">DBA</div>
+      <div>
+        <h1>Oracle 19<span>DBA</span></h1>
+        <p>
+          memória · usuários · tablespaces · impdp/expdp · sessões · diagnóstico
+          · presets ERP
+        </p>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="panel sidebar">
+        <div class="panel-head">
+          <div class="dot" style="background: var(--accent)"></div>
+          Módulos
+        </div>
+        <button class="nav-btn active" onclick="showTab('memoria', this)">
+          Memória <span>01</span>
+        </button>
+        <button class="nav-btn" onclick="showTab('usuarios', this)">
+          Usuários <span>02</span>
+        </button>
+        <button class="nav-btn" onclick="showTab('tablespaces', this)">
+          Tablespaces <span>03</span>
+        </button>
+        <button class="nav-btn" onclick="showTab('datafiles', this)">
+          Expandir Datafiles <span>04</span>
+        </button>
+        <button class="nav-btn" onclick="showTab('importexport', this)">
+          Importação / Exportação <span>05</span>
+        </button>
+        <button class="nav-btn" onclick="showTab('sessoes', this)">
+          Sessões e Locks <span>06</span>
+        </button>
+        <button class="nav-btn" onclick="showTab('diagnostico', this)">
+          Diagnóstico <span>07</span>
+        </button>
+        <button class="nav-btn" onclick="showTab('erp', this)">
+          ERP Presets <span>08</span>
+        </button>
+        <button class="nav-btn" onclick="showTab('patch', this)">
+          Patch Temporário <span>09</span>
+        </button>
+      </aside>
+
+      <main>
+        <section class="panel" style="margin-bottom: 16px">
+          <div class="panel-head">
+            <div
+              class="dot"
+              id="dbStatusDot"
+              style="background: var(--oracle)"
+            ></div>
+            Conexão Oracle
+          </div>
+          <div class="panel-body">
+            <div class="grid-3">
+              <div class="field">
+                <label>Usuário</label>
+                <input id="db_user" type="text" placeholder="SYS" />
+              </div>
+              <div class="field">
+                <label>Senha</label>
+                <input id="db_pass" type="password" placeholder="Senha" />
+              </div>
+              <div class="field">
+                <label>Connect String</label>
+                <input
+                  id="db_connect"
+                  type="text"
+                  placeholder="localhost:1521/XEPDB1"
+                />
+              </div>
+            </div>
+
+            <div
+              style="
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+                margin-top: 12px;
+              "
+            >
+              <button class="copy-btn" onclick="connectDatabase()">
+                Conectar
+              </button>
+              <button class="download-btn" onclick="disconnectDatabase()">
+                Desconectar
+              </button>
+              <button class="copy-btn" onclick="testCurrentConnection()">
+                Testar conexão
+              </button>
+            </div>
+
+            <div id="dbStatusText" class="note" style="margin-top: 12px">
+              Status: desconectado
+            </div>
+            <div
+              id="actionMessage"
+              class="note hidden"
+              style="margin-top: 12px"
+            ></div>
+            <div
+              id="executionTimer"
+              class="note hidden execution-timer"
+              style="margin-top: 12px"
+            ></div>
+          </div>
+        </section>
+
+        <!-- MEMORIA -->
+        <section id="tab-memoria" class="tab active">
+          <div class="grid-2">
+            <div>
+              <div class="panel">
+                <div class="panel-head">
+                  <div class="dot" style="background: var(--accent)"></div>
+                  Calculadora de memória
+                </div>
+                <div class="panel-body">
+                  <div class="field">
+                    <label>RAM total do servidor</label>
+                    <input
+                      type="number"
+                      id="totalRam"
+                      value="64"
+                      min="1"
+                      step="1"
+                    />
+                  </div>
+                  <div class="field">
+                    <label
+                      >Percentual para Oracle —
+                      <span
+                        id="pctLabel"
+                        style="font-size: 22px; color: var(--text)"
+                        >40</span
+                      >%</label
+                    >
+                    <input
+                      type="range"
+                      id="pctSlider"
+                      min="5"
+                      max="90"
+                      value="40"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Modo</label>
+                    <select id="memoryMode" onchange="computeMemory()">
+                      <option value="AMM">AMM (memory_target)</option>
+                      <option value="ASMM">
+                        ASMM (sga_target + pga_aggregate_target)
+                      </option>
+                    </select>
+                  </div>
+                  <div id="alertWarn" class="alert warn">
+                    Atenção: percentual alto pode causar pressão no sistema
+                    operacional.
+                  </div>
+                  <div id="alertDanger" class="alert danger">
+                    Crítico: acima de 80% a máquina pode ficar instável.
+                  </div>
+                  <div class="note">
+                    AMM é prático para laboratório. ASMM costuma ser mais
+                    indicado em produção com Huge Pages. Use isto como ponto de
+                    partida, não como sizing final.
+                  </div>
+                </div>
+                <div class="summary">
+                  <div class="cell">
+                    <div class="lbl">RAM Servidor</div>
+                    <div class="val" id="s_total">—</div>
+                  </div>
+                  <div class="cell">
+                    <div class="lbl">Oracle</div>
+                    <div class="val" id="s_alloc" style="color: var(--accent2)">
+                      —
+                    </div>
+                  </div>
+                  <div class="cell">
+                    <div class="lbl">SO</div>
+                    <div class="val" id="s_free" style="color: var(--green)">
+                      —
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="panel" style="margin-top: 16px">
+                <div class="panel-head">
+                  <div class="dot" style="background: var(--yellow)"></div>
+                  Parâmetros calculados
+                </div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Parâmetro</th>
+                      <th>MB</th>
+                      <th>GB</th>
+                      <th>Scope</th>
+                    </tr>
+                  </thead>
+                  <tbody id="memoryTable"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-head">
+                <div class="dot" style="background: var(--green)"></div>
+                Script de memória
+              </div>
+              <div class="panel-body">
+                <div class="note" style="margin-bottom: 12px">
+                  Aplique as etapas na ordem. O restart foi separado para evitar
+                  erro ao executar tudo de uma vez pelo sistema.
+                </div>
+                <div class="sql-wrap" style="margin-bottom: 12px">
+                  <div class="sql-toolbar">
+                    <div class="pills">
+                      <div class="pill pill-r"></div>
+                      <div class="pill pill-y"></div>
+                      <div class="pill pill-g"></div>
+                    </div>
+                    <span id="memoryFile" class="small">oracle_memory.sql</span>
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('memoryOutput', this)"
+                      >
+                        Copiar guia
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="memoryOutput"></pre>
+                </div>
+
+                <div class="sql-wrap" style="margin-bottom: 12px">
+                  <div class="sql-toolbar">
+                    <strong>Etapa 1 - Parâmetros</strong>
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('memoryStep1Output', this)"
+                      >
+                        Copiar SQL
+                      </button>
+                      <button
+                        class="download-btn"
+                        onclick="executeOutput('memoryStep1Output')"
+                      >
+                        Aplicar no banco
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="memoryStep1Output"></pre>
+                </div>
+
+                <div class="sql-wrap" style="margin-bottom: 12px">
+                  <div class="sql-toolbar">
+                    <strong>Etapa 2A - Shutdown</strong>
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('memoryStep2ShutdownOutput', this)"
+                      >
+                        Copiar SQL
+                      </button>
+                      <button
+                        class="download-btn"
+                        onclick="executeOutput('memoryStep2ShutdownOutput')"
+                      >
+                        Aplicar no banco
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="memoryStep2ShutdownOutput"></pre>
+                </div>
+
+                <div class="sql-wrap" style="margin-bottom: 12px">
+                  <div class="sql-toolbar">
+                    <strong>Etapa 2B - Startup</strong>
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('memoryStep2StartupOutput', this)"
+                      >
+                        Copiar SQL
+                      </button>
+                      <button
+                        class="download-btn"
+                        onclick="executeOutput('memoryStep2StartupOutput')"
+                      >
+                        Aplicar no banco
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="memoryStep2StartupOutput"></pre>
+                </div>
+
+                <div class="sql-wrap">
+                  <div class="sql-toolbar">
+                    <strong>Etapa 3 - Conferência</strong>
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('memoryStep3Output', this)"
+                      >
+                        Copiar SQL
+                      </button>
+                      <button
+                        class="download-btn"
+                        onclick="executeOutput('memoryStep3Output')"
+                      >
+                        Aplicar no banco
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="memoryStep3Output"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- USUARIOS -->
+        <section id="tab-usuarios" class="tab">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="dot" style="background: var(--blue)"></div>
+              Usuários e permissões
+            </div>
+            <div class="panel-body grid-2">
+              <div>
+                <div class="field">
+                  <label>Modelo</label>
+                  <select id="userTemplate" onchange="renderUsers()">
+                    <option value="create">Criar usuário completo</option>
+                    <option value="drop_only">Somente DROP USER</option>
+                    <option value="create_only">Somente CREATE USER</option>
+                    <option value="grant_only">Somente grants e quota</option>
+                    <option value="reset">Resetar senha</option>
+                    <option value="unlock">Desbloquear usuário</option>
+                    <option value="expire">Expirar senha</option>
+                    <option value="list">Listar usuários</option>
+                    <option value="privs">Ver privilégios do usuário</option>
+                  </select>
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label>Usuário</label
+                    ><input
+                      type="text"
+                      id="usr_name"
+                      value="ERP_HIDRAUMAQ"
+                      oninput="renderUsers()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Senha</label
+                    ><input
+                      type="text"
+                      id="usr_pass"
+                      value="ERP_HIDRAUMAQ"
+                      oninput="renderUsers()"
+                    />
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label>Default tablespace</label
+                    ><input
+                      type="text"
+                      id="usr_ts"
+                      value="USERS"
+                      oninput="renderUsers()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Temporary tablespace</label
+                    ><input
+                      type="text"
+                      id="usr_temp"
+                      value="TEMP"
+                      oninput="renderUsers()"
+                    />
+                  </div>
+                </div>
+                <div class="note" id="usersHelp"></div>
+              </div>
+              <div>
+                <div class="sql-wrap">
+                  <div class="sql-toolbar">
+                    <div class="pills">
+                      <div class="pill pill-r"></div>
+                      <div class="pill pill-y"></div>
+                      <div class="pill pill-g"></div>
+                    </div>
+                    <span id="usersFile" class="small">users.sql</span>
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('usersOutput', this)"
+                      >
+                        Copiar</button
+                      ><button
+                        class="download-btn"
+                        onclick="executeOutput('usersOutput')"
+                      >
+                        Aplicar no banco</button
+                      ><button
+                        class="download-btn"
+                        onclick="
+                          downloadPre(
+                            'usersOutput',
+                            document.getElementById('usersFile').textContent,
+                          )
+                        "
+                      >
+                        Baixar
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="usersOutput"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TABLESPACES -->
+        <section id="tab-tablespaces" class="tab">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="dot" style="background: var(--accent2)"></div>
+              Tablespaces e datafiles
+            </div>
+            <div class="panel-body grid-2">
+              <div>
+                <div class="field">
+                  <label>Modelo</label>
+                  <select id="tsTemplate" onchange="renderTablespaces()">
+                    <option value="users_list">USERS — listar datafiles</option>
+                    <option value="users_metrics">USERS — métricas</option>
+                    <option value="users_expand">
+                      USERS — expandir datafile
+                    </option>
+                    <option value="create_ts">Criar tablespace</option>
+                    <option value="list_ts">
+                      Listar tablespaces / datafiles
+                    </option>
+                    <option value="free_space">
+                      Espaço livre por tablespace
+                    </option>
+                    <option value="big_objects">Maiores objetos</option>
+                    <option value="nearly_full">
+                      Tablespaces quase cheias
+                    </option>
+                  </select>
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label>Tablespace</label
+                    ><input
+                      type="text"
+                      id="ts_name"
+                      value="USERS"
+                      oninput="renderTablespaces()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Caminho do datafile</label>
+                    <div class="path-field">
+                      <input
+                        type="text"
+                        id="ts_file"
+                        value="E:\app\Administrador\oradata\orcl\USERS09.DBF"
+                        oninput="renderTablespaces()"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div class="grid-3">
+                  <div class="field">
+                    <label>Tamanho inicial (GB)</label
+                    ><input
+                      type="number"
+                      id="ts_size"
+                      value="6"
+                      oninput="renderTablespaces()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>NEXT (GB)</label
+                    ><input
+                      type="number"
+                      id="ts_next"
+                      value="2"
+                      oninput="renderTablespaces()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Owner filtro</label
+                    ><input
+                      type="text"
+                      id="ts_owner"
+                      value="ERP"
+                      oninput="renderTablespaces()"
+                    />
+                  </div>
+                </div>
+                <div class="note" id="tsHelp"></div>
+              </div>
+              <div>
+                <div class="sql-wrap">
+                  <div class="sql-toolbar">
+                    <div class="pills">
+                      <div class="pill pill-r"></div>
+                      <div class="pill pill-y"></div>
+                      <div class="pill pill-g"></div>
+                    </div>
+                    <span id="tsFileName" class="small">tablespaces.sql</span>
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('tsOutput', this)"
+                      >
+                        Copiar</button
+                      ><button
+                        class="download-btn"
+                        onclick="executeOutput('tsOutput')"
+                      >
+                        Aplicar no banco</button
+                      ><button
+                        class="download-btn"
+                        onclick="
+                          downloadPre(
+                            'tsOutput',
+                            document.getElementById('tsFileName').textContent,
+                          )
+                        "
+                      >
+                        Baixar
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="tsOutput"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-datafiles" class="tab">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="dot" style="background: var(--yellow)"></div>
+              Expandir datafiles
+            </div>
+            <div class="panel-body grid-2">
+              <div>
+                <div class="field">
+                  <label>Modelo</label>
+                  <select id="dfTemplate" onchange="renderExpandDatafiles()">
+                    <option value="full">Pacote completo</option>
+                    <option value="params">Somente parâmetros</option>
+                    <option value="users">USERS01.DBF</option>
+                    <option value="temp">TEMP01.DBF</option>
+                    <option value="system">SYSTEM01.DBF</option>
+                  </select>
+                </div>
+
+                <div class="grid-2">
+                  <div class="field">
+                    <label>USERS datafile</label>
+                    <div class="path-field">
+                      <input
+                        type="text"
+                        id="df_users_file"
+                        value="D:\APP\ADMINISTRADOR\ORADATA\ORCL\USERS01.DBF"
+                        oninput="renderExpandDatafiles()"
+                      />
+                    </div>
+                  </div>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label>USERS resize (GB)</label>
+                      <input
+                        type="number"
+                        id="df_users_size"
+                        value="30"
+                        oninput="renderExpandDatafiles()"
+                      />
+                    </div>
+                    <div class="field">
+                      <label>USERS next (GB)</label>
+                      <input
+                        type="number"
+                        id="df_users_next"
+                        value="1"
+                        oninput="renderExpandDatafiles()"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="grid-2">
+                  <div class="field">
+                    <label>TEMP tempfile</label>
+                    <div class="path-field">
+                      <input
+                        type="text"
+                        id="df_temp_file"
+                        value="D:\APP\ADMINISTRADOR\ORADATA\ORCL\TEMP01.DBF"
+                        oninput="renderExpandDatafiles()"
+                      />
+                    </div>
+                  </div>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label>TEMP resize (GB)</label>
+                      <input
+                        type="number"
+                        id="df_temp_size"
+                        value="1"
+                        oninput="renderExpandDatafiles()"
+                      />
+                    </div>
+                    <div class="field">
+                      <label>TEMP next (MB)</label>
+                      <input
+                        type="number"
+                        id="df_temp_next"
+                        value="256"
+                        oninput="renderExpandDatafiles()"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="grid-2">
+                  <div class="field">
+                    <label>SYSTEM datafile</label>
+                    <div class="path-field">
+                      <input
+                        type="text"
+                        id="df_system_file"
+                        value="D:\APP\ADMINISTRADOR\ORADATA\ORCL\SYSTEM01.DBF"
+                        oninput="renderExpandDatafiles()"
+                      />
+                    </div>
+                  </div>
+                  <div class="grid-2">
+                    <div class="field">
+                      <label>SYSTEM resize (GB)</label>
+                      <input
+                        type="number"
+                        id="df_system_size"
+                        value="6"
+                        oninput="renderExpandDatafiles()"
+                      />
+                    </div>
+                    <div class="field">
+                      <label>SYSTEM next (GB)</label>
+                      <input
+                        type="number"
+                        id="df_system_next"
+                        value="1"
+                        oninput="renderExpandDatafiles()"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="grid-2">
+                  <div class="field">
+                    <label>OPEN_CURSORS</label>
+                    <input
+                      type="number"
+                      id="df_open_cursors"
+                      value="2000"
+                      oninput="renderExpandDatafiles()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>PROCESSES</label>
+                    <input
+                      type="number"
+                      id="df_processes"
+                      value="600"
+                      oninput="renderExpandDatafiles()"
+                    />
+                  </div>
+                </div>
+
+                <div class="note" id="dfHelp"></div>
+              </div>
+
+              <div>
+                <div class="sql-wrap">
+                  <div class="sql-toolbar">
+                    <div class="pills">
+                      <div class="pill pill-r"></div>
+                      <div class="pill pill-y"></div>
+                      <div class="pill pill-g"></div>
+                    </div>
+                    <span id="dfFileName" class="small"
+                      >expandir_datafiles.sql</span
+                    >
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('dfOutput', this)"
+                      >
+                        Copiar
+                      </button>
+                      <button
+                        class="download-btn"
+                        onclick="executeOutput('dfOutput')"
+                      >
+                        Aplicar no banco
+                      </button>
+                      <button
+                        class="download-btn"
+                        onclick="
+                          downloadPre(
+                            'dfOutput',
+                            document.getElementById('dfFileName').textContent,
+                          )
+                        "
+                      >
+                        Baixar
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="dfOutput"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- IMPORT EXPORT -->
+        <section id="tab-importexport" class="tab">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="dot" style="background: var(--green)"></div>
+              Data Pump, diretórios e backup
+            </div>
+            <div class="panel-body grid-2">
+              <div>
+                <div class="field">
+                  <label>Modelo</label>
+                  <select id="ieTemplate" onchange="renderImportExport()">
+                    <option value="dir_list">Listar directories</option>
+                    <option value="dir_create">Criar directory</option>
+                    <option value="impdp">Gerar IMPDP</option>
+                    <option value="expdp">Gerar EXPDP</option>
+                    <option value="jobs">Ver jobs Data Pump</option>
+                    <option value="rman">Histórico RMAN</option>
+                  </select>
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label>Directory name</label
+                    ><input
+                      type="text"
+                      id="ie_dir"
+                      value="DATA_PUMP_DIR"
+                      oninput="renderImportExport()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Caminho</label>
+                    <div class="path-field">
+                      <input
+                        type="text"
+                        id="ie_path"
+                        value="E:\backup\oracle"
+                        oninput="renderImportExport()"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div class="grid-3">
+                  <div class="field">
+                    <label>Usuário admin</label
+                    ><input
+                      type="text"
+                      id="ie_admin"
+                      value="system"
+                      oninput="renderImportExport()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Senha admin</label
+                    ><input
+                      type="text"
+                      id="ie_admin_pass"
+                      value="oracle"
+                      oninput="renderImportExport()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Serviço</label
+                    ><input
+                      type="text"
+                      id="ie_service"
+                      value="orclpdb"
+                      oninput="renderImportExport()"
+                    />
+                  </div>
+                </div>
+                <div class="grid-3">
+                  <div class="field">
+                    <label>Schema origem</label
+                    ><input
+                      type="text"
+                      id="ie_schema_src"
+                      value="ERP_"
+                      oninput="renderImportExport()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Schema destino</label
+                    ><input
+                      type="text"
+                      id="ie_schema_tgt"
+                      value="ERP_BASE"
+                      oninput="renderImportExport()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Dumpfile</label
+                    ><input
+                      type="text"
+                      id="ie_dump"
+                      value="ERP_BASE.DMP"
+                      oninput="renderImportExport()"
+                    />
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label>Logfile</label
+                    ><input
+                      type="text"
+                      id="ie_log"
+                      value="ERP_BASE.LOG"
+                      oninput="renderImportExport()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Parallel</label
+                    ><input
+                      type="number"
+                      id="ie_parallel"
+                      value="8"
+                      oninput="renderImportExport()"
+                    />
+                  </div>
+                </div>
+                <div class="note" id="ieHelp"></div>
+              </div>
+              <div>
+                <div class="sql-wrap">
+                  <div class="sql-toolbar">
+                    <div class="pills">
+                      <div class="pill pill-r"></div>
+                      <div class="pill pill-y"></div>
+                      <div class="pill pill-g"></div>
+                    </div>
+                    <span id="ieFileName" class="small">datapump.sql</span>
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('ieOutput', this)"
+                      >
+                        Copiar</button
+                      ><button
+                        class="download-btn"
+                        onclick="executeOutput('ieOutput')"
+                      >
+                        Aplicar no banco</button
+                      ><button
+                        class="download-btn"
+                        onclick="
+                          downloadPre(
+                            'ieOutput',
+                            document.getElementById('ieFileName').textContent,
+                          )
+                        "
+                      >
+                        Baixar
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="ieOutput"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SESSOES -->
+        <section id="tab-sessoes" class="tab">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="dot" style="background: var(--yellow)"></div>
+              Sessões, locks e travamentos
+            </div>
+            <div class="panel-body grid-2">
+              <div>
+                <div class="field">
+                  <label>Modelo</label>
+                  <select id="sessionTemplate" onchange="renderSessions()">
+                    <option value="active">Sessões ativas</option>
+                    <option value="blocking">Sessões bloqueando</option>
+                    <option value="locks">Locks atuais</option>
+                    <option value="kill">Gerar kill session</option>
+                    <option value="inactive">Sessões inativas</option>
+                  </select>
+                </div>
+                <div class="grid-3">
+                  <div class="field">
+                    <label>SID</label
+                    ><input
+                      type="number"
+                      id="sess_sid"
+                      value="123"
+                      oninput="renderSessions()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>SERIAL#</label
+                    ><input
+                      type="number"
+                      id="sess_serial"
+                      value="4567"
+                      oninput="renderSessions()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Usuário filtro</label
+                    ><input
+                      type="text"
+                      id="sess_user"
+                      value="ERP"
+                      oninput="renderSessions()"
+                    />
+                  </div>
+                </div>
+                <div class="note" id="sessionHelp"></div>
+              </div>
+              <div>
+                <div class="sql-wrap">
+                  <div class="sql-toolbar">
+                    <div class="pills">
+                      <div class="pill pill-r"></div>
+                      <div class="pill pill-y"></div>
+                      <div class="pill pill-g"></div>
+                    </div>
+                    <span id="sessionFileName" class="small">sessions.sql</span>
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('sessionOutput', this)"
+                      >
+                        Copiar</button
+                      ><button
+                        class="download-btn"
+                        onclick="executeOutput('sessionOutput')"
+                      >
+                        Aplicar no banco</button
+                      ><button
+                        class="download-btn"
+                        onclick="
+                          downloadPre(
+                            'sessionOutput',
+                            document.getElementById('sessionFileName')
+                              .textContent,
+                          )
+                        "
+                      >
+                        Baixar
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="sessionOutput"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- DIAGNOSTICO -->
+        <section id="tab-diagnostico" class="tab">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="dot" style="background: var(--oracle)"></div>
+              Health check e diagnóstico
+            </div>
+            <div class="panel-body grid-2">
+              <div>
+                <div class="field">
+                  <label>Modelo</label>
+                  <select id="diagTemplate" onchange="renderDiagnostic()">
+                    <option value="health">Health check geral</option>
+                    <option value="invalid">Objetos inválidos</option>
+                    <option value="recompile">Recompilar inválidos</option>
+                    <option value="dbsize">Tamanho total do banco</option>
+                    <option value="schemasize">Maiores schemas</option>
+                    <option value="params">Parâmetros principais</option>
+                  </select>
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label>Owner/schema</label
+                    ><input
+                      type="text"
+                      id="diag_owner"
+                      value="ERP"
+                      oninput="renderDiagnostic()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Nome amigável</label
+                    ><input
+                      type="text"
+                      id="diag_env"
+                      value="ERP Produção"
+                      oninput="renderDiagnostic()"
+                    />
+                  </div>
+                </div>
+                <div class="note" id="diagHelp"></div>
+              </div>
+              <div>
+                <div class="sql-wrap">
+                  <div class="sql-toolbar">
+                    <div class="pills">
+                      <div class="pill pill-r"></div>
+                      <div class="pill pill-y"></div>
+                      <div class="pill pill-g"></div>
+                    </div>
+                    <span id="diagFileName" class="small">diagnostic.sql</span>
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('diagOutput', this)"
+                      >
+                        Copiar</button
+                      ><button
+                        class="download-btn"
+                        onclick="executeOutput('diagOutput')"
+                      >
+                        Aplicar no banco</button
+                      ><button
+                        class="download-btn"
+                        onclick="
+                          downloadPre(
+                            'diagOutput',
+                            document.getElementById('diagFileName').textContent,
+                          )
+                        "
+                      >
+                        Baixar
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="diagOutput"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ERP -->
+        <section id="tab-erp" class="tab">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="dot" style="background: var(--blue)"></div>
+              Presets ERP / Implantação
+            </div>
+            <div class="panel-body grid-2">
+              <div>
+                <div class="field">
+                  <label>Modelo</label>
+                  <select id="erpTemplate" onchange="renderErp()">
+                    <option value="setupinicial">Setup Inicial do Banco</option>
+                    <option value="install">Pacote de implantação ERP</option>
+                    <option value="postimport">Checklist pós-importação</option>
+                    <option value="crypto">Grant DBMS_CRYPTO</option>
+                    <option value="healthpack">
+                      Pacote de diagnóstico ERP
+                    </option>
+                    <option value="checklist">Checklist técnico</option>
+                  </select>
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label>Usuário ERP</label
+                    ><input
+                      type="text"
+                      id="erp_user"
+                      value="ERP_HIDRAUMAQ"
+                      oninput="renderErp()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Tablespace ERP</label
+                    ><input
+                      type="text"
+                      id="erp_ts"
+                      value="USERS"
+                      oninput="renderErp()"
+                    />
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label>Schema origem</label
+                    ><input
+                      type="text"
+                      id="erp_src"
+                      value="ERP_"
+                      oninput="renderErp()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Schema destino</label
+                    ><input
+                      type="text"
+                      id="erp_dst"
+                      value="ERP_BASE"
+                      oninput="renderErp()"
+                    />
+                  </div>
+                </div>
+                <div class="grid-2" id="erp_setup_fields" style="display: none">
+                  <div class="field">
+                    <label>Caminho Oracle Data</label
+                    ><input
+                      type="text"
+                      id="erp_ora_path"
+                      value="E:\Oracle19\App\Oracle\oradata\ORCL19"
+                      oninput="renderErp()"
+                    />
+                  </div>
+                  <div class="field">
+                    <label>Senha do usuário ERP</label
+                    ><input
+                      type="text"
+                      id="erp_user_pass"
+                      value="ERP"
+                      oninput="renderErp()"
+                    />
+                  </div>
+                </div>
+                <div class="note" id="erpHelp"></div>
+                <div class="tagrow" style="margin-top: 12px">
+                  <span class="tag">implantação</span
+                  ><span class="tag">suporte</span><span class="tag">erp</span
+                  ><span class="tag">oracle 19c</span
+                  ><span class="tag">checklist</span>
+                </div>
+              </div>
+              <div>
+                <div class="sql-wrap">
+                  <div class="sql-toolbar">
+                    <div class="pills">
+                      <div class="pill pill-r"></div>
+                      <div class="pill pill-y"></div>
+                      <div class="pill pill-g"></div>
+                    </div>
+                    <span id="erpFileName" class="small">erp_preset.sql</span>
+                    <div style="display: flex; gap: 8px">
+                      <button
+                        class="copy-btn"
+                        onclick="copyPre('erpOutput', this)"
+                      >
+                        Copiar</button
+                      ><button
+                        class="download-btn"
+                        onclick="executeOutput('erpOutput')"
+                      >
+                        Aplicar no banco</button
+                      ><button
+                        class="download-btn"
+                        onclick="
+                          downloadPre(
+                            'erpOutput',
+                            document.getElementById('erpFileName').textContent,
+                          )
+                        "
+                      >
+                        Baixar
+                      </button>
+                    </div>
+                  </div>
+                  <pre id="erpOutput"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- PATCH -->
+        <section id="tab-patch" class="tab">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="dot" style="background: var(--accent2)"></div>
+              Aplicação de patch temporário Oracle 19c
+            </div>
+            <div class="panel-body">
+              <div class="note" style="margin-bottom: 12px">
+                Este módulo executa o fluxo externo de patch com OPatch,
+                shutdown, listener, datapatch e validação final. Use em
+                pós-instalação ou janela de manutenção controlada.
+              </div>
+              <div class="grid-2">
+                <div class="field">
+                  <label>Oracle Home</label>
+                  <div class="path-field">
+                    <input
+                      id="patch_oracle_home"
+                      type="text"
+                      placeholder="D:\Oracle19\App\Oracle\product\19c\db_home"
+                    />
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Oracle SID</label>
+                  <input
+                    id="patch_oracle_sid"
+                    type="text"
+                    placeholder="ORCL19"
+                  />
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="field">
+                  <label>Diretório do patch já descompactado</label>
+                  <div class="path-field">
+                    <input
+                      id="patch_dir"
+                      type="text"
+                      placeholder="D:\patches\37962957\37962957"
+                    />
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Diretório de trabalho / logs</label>
+                  <div class="path-field">
+                    <input
+                      id="patch_work_root"
+                      type="text"
+                      placeholder="D:\patches\37962957"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="field">
+                  <label>Listener</label>
+                  <input id="patch_listener" type="text" value="LISTENER" />
+                </div>
+                <div class="field">
+                  <label>Ações</label>
+                  <div
+                    style="
+                      display: flex;
+                      gap: 16px;
+                      flex-wrap: wrap;
+                      margin-top: 8px;
+                    "
+                  >
+                    <label class="check-label">
+                      <input id="patch_auto_start" type="checkbox" checked />
+                      Subir banco após patch
+                    </label>
+                    <label class="check-label">
+                      <input id="patch_open_pdbs" type="checkbox" />
+                      Abrir todos os PDBs
+                    </label>
+                  </div>
+                </div>
+              </div>
+              <div
+                style="
+                  display: flex;
+                  gap: 10px;
+                  flex-wrap: wrap;
+                  margin-top: 12px;
+                "
+              >
+                <button class="download-btn" onclick="executePatchApply()">
+                  Aplicar Patch
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" style="margin-top: 16px">
+          <div class="panel-head">
+            <div class="dot" style="background: var(--yellow)"></div>
+            Log da execução
+          </div>
+          <div class="panel-body" id="executionLogArea">
+            <div class="small">Nenhuma execução registrada ainda.</div>
+          </div>
+        </section>
+
+        <section class="panel" style="margin-top: 16px">
+          <div class="panel-head">
+            <div class="dot" style="background: var(--blue)"></div>
+            Resultado da execução
+          </div>
+          <div class="panel-body" id="resultArea">
+            <div class="small">Nenhum resultado ainda.</div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./assets/js/app.js"></script>
+    <footer class="site-footer">
+      <div class="footer-inner">
+        <span>Criado por <strong>Jeferson</strong></span>
+      </div>
+    </footer>
+  </body>
+</html>

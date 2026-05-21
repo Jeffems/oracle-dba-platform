@@ -1,0 +1,30 @@
+Correção aplicada - Agent 404
+
+Esta versão corrige o erro "Falha ao consultar Agent. HTTP 404" no módulo Agent Coletor Local.
+
+O que foi ajustado:
+1. src/services/oracleClient.ts agora tenta primeiro o Oracle Bridge em:
+   http://127.0.0.1:3789/agent/status
+
+2. Se o bridge antigo ainda estiver aberto ou retornar 404, o frontend faz fallback para o Agent Windows Service em:
+   http://127.0.0.1:3334/api/agent/status
+
+3. O script tauri:dev já executa npm run build:bridge automaticamente antes de abrir o Tauri.
+
+Importante antes de testar:
+- Feche o aplicativo.
+- Mate processos antigos do bridge:
+
+  taskkill /F /IM node-runtime.exe
+  taskkill /F /IM oracle-dba-desktop.exe
+
+- Depois rode:
+
+  npm run tauri:dev
+
+Teste manual:
+- Bridge interno:
+  http://127.0.0.1:3789/agent/status
+
+- Serviço Windows Agent:
+  http://127.0.0.1:3334/api/agent/status

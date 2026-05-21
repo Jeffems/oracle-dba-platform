@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Agent {
+  id           String   @id @default(uuid())
+  agentId      String   @unique
+  customerName String?
+  environment  String?  @default("PRODUCAO")
+  host         String?
+  dbName       String?
+  version      String?
+  lastSeenAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  metrics      Metric[]
+
+  @@index([lastSeenAt])
+}
+
+model Metric {
+  id           String   @id @default(uuid())
+  agentId      String
+  customerName String?
+  environment  String?
+  host         String?
+  dbName       String?
+  version      String?
+  snapshot     Json
+  receivedAt   DateTime @default(now())
+  agent        Agent?   @relation(fields: [agentId], references: [agentId], onDelete: Cascade)
+
+  @@index([agentId, receivedAt])
+  @@index([receivedAt])
+}
+
+model Alert {
+  id        String   @id @default(uuid())
+  agentId   String?
+  level     String
+  message   String
+  createdAt DateTime @default(now())
+  resolved  Boolean  @default(false)
+
+  @@index([agentId, createdAt])
+  @@index([level, createdAt])
+}
+
+model Command {
+  id        String   @id @default(uuid())
+  agentId   String?
+  type      String
+  sql       String?
+  status    String   @default("PENDING_APPROVAL")
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agentId, createdAt])
+  @@index([status])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String
+  details   Json?
+  createdAt DateTime @default(now())
+
+  @@index([action, createdAt])
+}

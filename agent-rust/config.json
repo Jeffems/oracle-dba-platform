@@ -1,0 +1,16 @@
+{
+  "agentId": "CLIENTE_001_ORACLE19_PROD",
+  "customerName": "Cliente Exemplo",
+  "environment": "PRODUCAO",
+  "apiUrl": "http://127.0.0.1:4090",
+  "apiToken": "dev-token-change-me",
+  "intervalSeconds": 60,
+  "oracle": {
+    "sqlplusPath": "sqlplus",
+    "user": "system",
+    "password": "senha",
+    "connectString": "192.168.0.10:1521/ORCL",
+    "asSysdba": false
+  },
+  "logDir": "C:\\ProgramData\\OracleDBAAgent\\logs"
+}
