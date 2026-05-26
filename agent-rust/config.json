@@ -2,7 +2,7 @@
   "agentId": "CLIENTE_001_ORACLE19_PROD",
   "customerName": "Cliente Exemplo",
   "environment": "PRODUCAO",
-  "apiUrl": "http://127.0.0.1:4090",
+  "apiUrl": "central-api-production-cedc.up.railway.app",
   "apiToken": "dev-token-change-me",
   "intervalSeconds": 60,
   "oracle": {
