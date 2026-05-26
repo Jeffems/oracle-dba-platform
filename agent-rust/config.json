@@ -8,8 +8,8 @@
   "oracle": {
     "sqlplusPath": "sqlplus",
     "user": "system",
-    "password": "senha",
-    "connectString": "192.168.0.10:1521/ORCL",
+    "password": "oracle",
+    "connectString": " 172.16.10.241:1521/ORCL19",
     "asSysdba": false
   },
   "logDir": "C:\\ProgramData\\OracleDBAAgent\\logs"

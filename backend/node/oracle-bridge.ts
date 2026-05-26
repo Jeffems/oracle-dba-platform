@@ -1,49 +1,115 @@
-import http from 'node:http';
-import { spawn } from 'node:child_process';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import oracledb from 'oracledb';
-import type { OracleConnectionConfig } from '../../src/types/oracle';
+import http from "node:http";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import oracledb from "oracledb";
+import type { OracleConnectionConfig } from "../../src/types/oracle";
 
 const PORT = 3789;
 type Payload = { config: OracleConnectionConfig; sql?: string };
-type ScriptStatement = { index: number; statement: string; startLine: number; endLine: number };
+type ScriptStatement = {
+  index: number;
+  statement: string;
+  startLine: number;
+  endLine: number;
+};
 type ScriptProgressEvent =
-  | { type: 'start'; total: number; startedAt: string }
-  | { type: 'statement-start'; index: number; total: number; line: number; endLine: number; statement: string; startedAt: string }
-  | { type: 'statement-success'; index: number; line: number; endLine: number; statement: string; durationMs: number; rowsAffected: number; rowCount: number; message: string }
-  | { type: 'statement-warning'; index: number; line: number; endLine: number; statement: string; durationMs: number; message: string }
-  | { type: 'statement-error'; index: number; line: number; endLine: number; statement: string; durationMs: number; message: string }
-  | { type: 'done'; result: any; durationMs: number }
-  | { type: 'fatal'; message: string; durationMs: number };
-
+  | { type: "start"; total: number; startedAt: string }
+  | {
+      type: "statement-start";
+      index: number;
+      total: number;
+      line: number;
+      endLine: number;
+      statement: string;
+      startedAt: string;
+    }
+  | {
+      type: "statement-success";
+      index: number;
+      line: number;
+      endLine: number;
+      statement: string;
+      durationMs: number;
+      rowsAffected: number;
+      rowCount: number;
+      message: string;
+    }
+  | {
+      type: "statement-warning";
+      index: number;
+      line: number;
+      endLine: number;
+      statement: string;
+      durationMs: number;
+      message: string;
+    }
+  | {
+      type: "statement-error";
+      index: number;
+      line: number;
+      endLine: number;
+      statement: string;
+      durationMs: number;
+      message: string;
+    }
+  | { type: "done"; result: any; durationMs: number }
+  | { type: "fatal"; message: string; durationMs: number };
 
 function readBody(req: http.IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
-    let body = '';
-    req.on('data', c => body += c);
-    req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch (err) { reject(err); } });
-    req.on('error', reject);
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on("error", reject);
   });
 }
 function send(res: http.ServerResponse, status: number, data: unknown) {
-  res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'POST, OPTIONS' });
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  });
   res.end(JSON.stringify(data));
 }
 async function getConnection(config: OracleConnectionConfig) {
-  return oracledb.getConnection({ user: config.user, password: config.password, connectString: config.connectString, privilege: config.sysdba || String(config.user || '').trim().toUpperCase() === 'SYS' ? oracledb.SYSDBA : undefined });
+  return oracledb.getConnection({
+    user: config.user,
+    password: config.password,
+    connectString: config.connectString,
+    privilege:
+      config.sysdba ||
+      String(config.user || "")
+        .trim()
+        .toUpperCase() === "SYS"
+        ? oracledb.SYSDBA
+        : undefined,
+  });
 }
 async function testConnection(config: OracleConnectionConfig) {
   let conn;
-  try { conn = await getConnection(config); await conn.execute('SELECT 1 FROM dual'); return { ok: true, message: 'Conectado com sucesso.' }; }
-  catch (err: any) { return { ok: false, message: err?.message ?? String(err) }; }
-  finally { if (conn) await conn.close(); }
+  try {
+    conn = await getConnection(config);
+    await conn.execute("SELECT 1 FROM dual");
+    return { ok: true, message: "Conectado com sucesso." };
+  } catch (err: any) {
+    return { ok: false, message: err?.message ?? String(err) };
+  } finally {
+    if (conn) await conn.close();
+  }
 }
 
 function splitSqlStatements(script: string): ScriptStatement[] {
   const statements: ScriptStatement[] = [];
-  let current = '';
+  let current = "";
   let inSingle = false;
   let inDouble = false;
   let inLineComment = false;
@@ -53,164 +119,390 @@ function splitSqlStatements(script: string): ScriptStatement[] {
 
   function pushStatement(endLine: number) {
     const text = current.trim();
-    if (text) statements.push({ index: statements.length + 1, statement: text, startLine: statementStartLine, endLine });
-    current = '';
+    if (text)
+      statements.push({
+        index: statements.length + 1,
+        statement: text,
+        startLine: statementStartLine,
+        endLine,
+      });
+    current = "";
     statementStartLine = line;
   }
 
   for (let i = 0; i < script.length; i++) {
-    const ch = script[i], next = script[i + 1];
+    const ch = script[i],
+      next = script[i + 1];
 
     if (!current.trim() && ch.trim()) statementStartLine = line;
 
     if (inLineComment) {
       current += ch;
-      if (ch === '\n') { inLineComment = false; line++; }
+      if (ch === "\n") {
+        inLineComment = false;
+        line++;
+      }
       continue;
     }
 
     if (inBlockComment) {
       current += ch;
-      if (ch === '\n') line++;
-      if (ch === '*' && next === '/') { current += next; i++; inBlockComment = false; }
+      if (ch === "\n") line++;
+      if (ch === "*" && next === "/") {
+        current += next;
+        i++;
+        inBlockComment = false;
+      }
       continue;
     }
 
     if (!inSingle && !inDouble) {
-      if (ch === '-' && next === '-') { current += ch + next; i++; inLineComment = true; continue; }
-      if (ch === '/' && next === '*') { current += ch + next; i++; inBlockComment = true; continue; }
+      if (ch === "-" && next === "-") {
+        current += ch + next;
+        i++;
+        inLineComment = true;
+        continue;
+      }
+      if (ch === "/" && next === "*") {
+        current += ch + next;
+        i++;
+        inBlockComment = true;
+        continue;
+      }
     }
 
     if (ch === "'" && !inDouble) {
       current += ch;
-      if (inSingle && next === "'") { current += next; i++; }
-      else inSingle = !inSingle;
+      if (inSingle && next === "'") {
+        current += next;
+        i++;
+      } else inSingle = !inSingle;
       continue;
     }
 
-    if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; continue; }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      current += ch;
+      continue;
+    }
 
-    if (ch === ';' && !inSingle && !inDouble) { pushStatement(line); continue; }
+    if (ch === ";" && !inSingle && !inDouble) {
+      pushStatement(line);
+      continue;
+    }
 
     current += ch;
-    if (ch === '\n') line++;
+    if (ch === "\n") line++;
   }
 
   pushStatement(line);
   return statements.map((item, index) => ({ ...item, index: index + 1 }));
 }
 
-function normalizeStatement(stmt: string) { return stmt.trim().replace(/\s+/g, ' ').toLowerCase(); }
-function isUnsupportedCommand(stmt: string) { const s = normalizeStatement(stmt); return s.startsWith('impdp ') || s.startsWith('expdp ') || s.startsWith('rman '); }
-function isSqlPlusAdminCommand(stmt: string) { const s = normalizeStatement(stmt); return s === 'shutdown immediate' || s === 'startup'; }
-function sqlplusEscape(value: string) { return String(value || '').replace(/"/g, '""'); }
-function getOracleErrorCode(err: any) { const msg = err?.message ? String(err.message) : String(err || ''); const match = msg.match(/ORA-(\d{5})/i); return match ? match[1] : null; }
-function isIgnorableOracleError(stmt: string, err: any) { const normalized = normalizeStatement(stmt); const code = getOracleErrorCode(err); return (normalized.startsWith('drop user ') && code === '01918') || (normalized.startsWith('drop tablespace ') && code === '00959') || (normalized.startsWith('drop role ') && code === '01919') || (normalized.startsWith('drop profile ') && code === '02380'); }
+function normalizeStatement(stmt: string) {
+  return stmt.trim().replace(/\s+/g, " ").toLowerCase();
+}
+function isUnsupportedCommand(stmt: string) {
+  const s = normalizeStatement(stmt);
+  return (
+    s.startsWith("impdp ") || s.startsWith("expdp ") || s.startsWith("rman ")
+  );
+}
+function isSqlPlusAdminCommand(stmt: string) {
+  const s = normalizeStatement(stmt);
+  return s === "shutdown immediate" || s === "startup";
+}
+function sqlplusEscape(value: string) {
+  return String(value || "").replace(/"/g, '""');
+}
+function getOracleErrorCode(err: any) {
+  const msg = err?.message ? String(err.message) : String(err || "");
+  const match = msg.match(/ORA-(\d{5})/i);
+  return match ? match[1] : null;
+}
+function isIgnorableOracleError(stmt: string, err: any) {
+  const normalized = normalizeStatement(stmt);
+  const code = getOracleErrorCode(err);
+  return (
+    (normalized.startsWith("drop user ") && code === "01918") ||
+    (normalized.startsWith("drop tablespace ") && code === "00959") ||
+    (normalized.startsWith("drop role ") && code === "01919") ||
+    (normalized.startsWith("drop profile ") && code === "02380")
+  );
+}
 function convertSqlPlusCommand(stmt: string) {
   const s = normalizeStatement(stmt);
-  if (s.startsWith('show parameter ')) {
-    const term = stmt.trim().replace(/^show\s+parameter\s+/i, '').replace(/;$/, '').trim();
+  if (s.startsWith("show parameter ")) {
+    const term = stmt
+      .trim()
+      .replace(/^show\s+parameter\s+/i, "")
+      .replace(/;$/, "")
+      .trim();
     return `SELECT name, value, display_value FROM v$parameter WHERE LOWER(name) LIKE LOWER('%${term.replace(/'/g, "''")}%') ORDER BY name`;
   }
-  if (s.startsWith('exec ')) return `BEGIN ${stmt.trim().replace(/^exec\s+/i, '').replace(/;$/, '')}; END;`;
+  if (s.startsWith("exec "))
+    return `BEGIN ${stmt
+      .trim()
+      .replace(/^exec\s+/i, "")
+      .replace(/;$/, "")}; END;`;
   return stmt;
 }
 function runSqlPlusAdminCommand(stmt: string, config: OracleConnectionConfig) {
   return new Promise<{ ok: boolean; message: string }>((resolve) => {
-    const user = String(config.user || '').trim();
-    if (user.toUpperCase() !== 'SYS' && !config.sysdba) { resolve({ ok: false, message: 'Para executar SHUTDOWN/STARTUP, conecte como SYS AS SYSDBA.' }); return; }
-    const sqlplus = spawn('sqlplus', ['-S', '/nolog'], { windowsHide: true });
-    let stdout = '', stderr = '';
-    sqlplus.stdout.on('data', d => stdout += d.toString());
-    sqlplus.stderr.on('data', d => stderr += d.toString());
-    sqlplus.on('error', (err) => resolve({ ok: false, message: 'Não foi possível executar o sqlplus. Verifique se ele está instalado e no PATH. Detalhe: ' + (err.message || err) }));
-    sqlplus.on('close', (code) => {
+    const user = String(config.user || "").trim();
+    if (user.toUpperCase() !== "SYS" && !config.sysdba) {
+      resolve({
+        ok: false,
+        message: "Para executar SHUTDOWN/STARTUP, conecte como SYS AS SYSDBA.",
+      });
+      return;
+    }
+    const sqlplus = spawn("sqlplus", ["-S", "/nolog"], { windowsHide: true });
+    let stdout = "",
+      stderr = "";
+    sqlplus.stdout.on("data", (d) => (stdout += d.toString()));
+    sqlplus.stderr.on("data", (d) => (stderr += d.toString()));
+    sqlplus.on("error", (err) =>
+      resolve({
+        ok: false,
+        message:
+          "Não foi possível executar o sqlplus. Verifique se ele está instalado e no PATH. Detalhe: " +
+          (err.message || err),
+      }),
+    );
+    sqlplus.on("close", (code) => {
       const output = `${stdout}\n${stderr}`.trim();
-      if (code !== 0) return resolve({ ok: false, message: output || `sqlplus retornou código ${code}.` });
-      if (/ORA-\d{5}/i.test(output) || /SP2-\d{4}/i.test(output)) return resolve({ ok: false, message: output });
-      resolve({ ok: true, message: output || 'Comando administrativo executado com sucesso.' });
+      if (code !== 0)
+        return resolve({
+          ok: false,
+          message: output || `sqlplus retornou código ${code}.`,
+        });
+      if (/ORA-\d{5}/i.test(output) || /SP2-\d{4}/i.test(output))
+        return resolve({ ok: false, message: output });
+      resolve({
+        ok: true,
+        message: output || "Comando administrativo executado com sucesso.",
+      });
     });
     const connectCmd = `connect ${sqlplusEscape(config.user)}/"${sqlplusEscape(config.password)}"@${config.connectString} as sysdba\n`;
-    sqlplus.stdin.write(connectCmd); sqlplus.stdin.write(`${stmt.trim()};\n`); sqlplus.stdin.write('exit\n'); sqlplus.stdin.end();
+    sqlplus.stdin.write(connectCmd);
+    sqlplus.stdin.write(`${stmt.trim()};\n`);
+    sqlplus.stdin.write("exit\n");
+    sqlplus.stdin.end();
   });
 }
 
 async function executeScript(config: OracleConnectionConfig, sql: string) {
   let conn: any;
   try {
-    const statements = splitSqlStatements(sql).filter(item => item.statement.trim());
-    if (!statements.length) return { ok: false, message: 'Nenhum comando SQL encontrado.' };
-    for (const item of statements) if (isUnsupportedCommand(item.statement)) return { ok: false, message: 'Comando de terminal gerado, não executável diretamente no banco: ' + item.statement };
-    let lastResult: any = null; let executedCount = 0; const warnings: any[] = []; const logs: any[] = [];
+    const statements = splitSqlStatements(sql).filter((item) =>
+      item.statement.trim(),
+    );
+    if (!statements.length)
+      return { ok: false, message: "Nenhum comando SQL encontrado." };
+    for (const item of statements)
+      if (isUnsupportedCommand(item.statement))
+        return {
+          ok: false,
+          message:
+            "Comando de terminal gerado, não executável diretamente no banco: " +
+            item.statement,
+        };
+    let lastResult: any = null;
+    let executedCount = 0;
+    const warnings: any[] = [];
+    const logs: any[] = [];
     for (let i = 0; i < statements.length; i++) {
-      const item = statements[i]; const rawStmt = item.statement; const startedAt = Date.now();
+      const item = statements[i];
+      const rawStmt = item.statement;
+      const startedAt = Date.now();
       try {
         if (isSqlPlusAdminCommand(rawStmt)) {
-          if (conn) { try { await conn.close(); } catch {} conn = null; }
+          if (conn) {
+            try {
+              await conn.close();
+            } catch {}
+            conn = null;
+          }
           const adminResult = await runSqlPlusAdminCommand(rawStmt, config);
-          if (!adminResult.ok) { logs.push({ index: i + 1, line: item.startLine, endLine: item.endLine, status: 'error', statement: rawStmt, message: adminResult.message, durationMs: Date.now() - startedAt }); return { ok: false, message: adminResult.message, failedStatement: rawStmt, executedCount, warningCount: warnings.length, warnings, logs }; }
-          executedCount++; logs.push({ index: i + 1, line: item.startLine, endLine: item.endLine, status: 'success', statement: rawStmt, message: adminResult.message, durationMs: Date.now() - startedAt, rowsAffected: 0, rowCount: 0 }); continue;
+          if (!adminResult.ok) {
+            logs.push({
+              index: i + 1,
+              line: item.startLine,
+              endLine: item.endLine,
+              status: "error",
+              statement: rawStmt,
+              message: adminResult.message,
+              durationMs: Date.now() - startedAt,
+            });
+            return {
+              ok: false,
+              message: adminResult.message,
+              failedStatement: rawStmt,
+              executedCount,
+              warningCount: warnings.length,
+              warnings,
+              logs,
+            };
+          }
+          executedCount++;
+          logs.push({
+            index: i + 1,
+            line: item.startLine,
+            endLine: item.endLine,
+            status: "success",
+            statement: rawStmt,
+            message: adminResult.message,
+            durationMs: Date.now() - startedAt,
+            rowsAffected: 0,
+            rowCount: 0,
+          });
+          continue;
         }
         if (!conn) conn = await getConnection(config);
         const stmt = convertSqlPlusCommand(rawStmt);
-        lastResult = await conn.execute(stmt, [], { outFormat: oracledb.OUT_FORMAT_OBJECT, autoCommit: false });
+        lastResult = await conn.execute(stmt, [], {
+          outFormat: oracledb.OUT_FORMAT_OBJECT,
+          autoCommit: false,
+        });
         executedCount++;
-        logs.push({ index: i + 1, line: item.startLine, endLine: item.endLine, status: 'success', statement: rawStmt, message: 'Comando executado com sucesso.', durationMs: Date.now() - startedAt, rowsAffected: lastResult.rowsAffected || 0, rowCount: (lastResult.rows || []).length });
+        logs.push({
+          index: i + 1,
+          line: item.startLine,
+          endLine: item.endLine,
+          status: "success",
+          statement: rawStmt,
+          message: "Comando executado com sucesso.",
+          durationMs: Date.now() - startedAt,
+          rowsAffected: lastResult.rowsAffected || 0,
+          rowCount: (lastResult.rows || []).length,
+        });
       } catch (err: any) {
         const message = err?.message ?? String(err);
-        if (isIgnorableOracleError(rawStmt, err)) { warnings.push({ statement: rawStmt, message }); logs.push({ index: i + 1, line: item.startLine, endLine: item.endLine, status: 'warning', statement: rawStmt, message, durationMs: Date.now() - startedAt }); continue; }
-        logs.push({ index: i + 1, line: item.startLine, endLine: item.endLine, status: 'error', statement: rawStmt, message, durationMs: Date.now() - startedAt });
-        try { if (conn) await conn.rollback(); } catch {}
-        return { ok: false, message, failedStatement: rawStmt, executedCount, warningCount: warnings.length, warnings, logs };
+        if (isIgnorableOracleError(rawStmt, err)) {
+          warnings.push({ statement: rawStmt, message });
+          logs.push({
+            index: i + 1,
+            line: item.startLine,
+            endLine: item.endLine,
+            status: "warning",
+            statement: rawStmt,
+            message,
+            durationMs: Date.now() - startedAt,
+          });
+          continue;
+        }
+        logs.push({
+          index: i + 1,
+          line: item.startLine,
+          endLine: item.endLine,
+          status: "error",
+          statement: rawStmt,
+          message,
+          durationMs: Date.now() - startedAt,
+        });
+        try {
+          if (conn) await conn.rollback();
+        } catch {}
+        return {
+          ok: false,
+          message,
+          failedStatement: rawStmt,
+          executedCount,
+          warningCount: warnings.length,
+          warnings,
+          logs,
+        };
       }
     }
     if (conn) await conn.commit();
-    return { ok: true, executedCount, warningCount: warnings.length, warnings, logs, rows: lastResult?.rows ?? [], rowsAffected: lastResult?.rowsAffected ?? 0, metaData: lastResult?.metaData ?? [], lastResult: { rows: lastResult?.rows ?? [], rowsAffected: lastResult?.rowsAffected ?? 0, metaData: lastResult?.metaData ?? [] } };
-  } catch (err: any) { if (conn) { try { await conn.rollback(); } catch {} } return { ok: false, message: err?.message ?? String(err) }; }
-  finally { if (conn) await conn.close(); }
+    return {
+      ok: true,
+      executedCount,
+      warningCount: warnings.length,
+      warnings,
+      logs,
+      rows: lastResult?.rows ?? [],
+      rowsAffected: lastResult?.rowsAffected ?? 0,
+      metaData: lastResult?.metaData ?? [],
+      lastResult: {
+        rows: lastResult?.rows ?? [],
+        rowsAffected: lastResult?.rowsAffected ?? 0,
+        metaData: lastResult?.metaData ?? [],
+      },
+    };
+  } catch (err: any) {
+    if (conn) {
+      try {
+        await conn.rollback();
+      } catch {}
+    }
+    return { ok: false, message: err?.message ?? String(err) };
+  } finally {
+    if (conn) await conn.close();
+  }
 }
-
 
 function sendStreamEvent(res: http.ServerResponse, event: ScriptProgressEvent) {
-  res.write(JSON.stringify(event) + '\n');
+  res.write(JSON.stringify(event) + "\n");
   // Em alguns WebViews/proxies o chunk pode ficar em buffer; este flush ajuda
   // quando o consumidor usa o endpoint /execute-script-stream.
-  if (typeof (res as any).flush === 'function') (res as any).flush();
+  if (typeof (res as any).flush === "function") (res as any).flush();
 }
 
-async function executeScriptStream(config: OracleConnectionConfig, sql: string, res: http.ServerResponse) {
+async function executeScriptStream(
+  config: OracleConnectionConfig,
+  sql: string,
+  res: http.ServerResponse,
+) {
   const globalStartedAt = Date.now();
   let conn: any;
 
   res.writeHead(200, {
-    'Content-Type': 'application/x-ndjson; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'X-Accel-Buffering': 'no'
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "X-Accel-Buffering": "no",
   });
-  if (typeof res.flushHeaders === 'function') res.flushHeaders();
-  res.write(': stream-open\n');
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+  res.write(": stream-open\n");
 
   try {
-    const statements = splitSqlStatements(sql).filter(item => item.statement.trim());
+    const statements = splitSqlStatements(sql).filter((item) =>
+      item.statement.trim(),
+    );
     if (!statements.length) {
-      sendStreamEvent(res, { type: 'fatal', message: 'Nenhum comando SQL encontrado.', durationMs: Date.now() - globalStartedAt });
+      sendStreamEvent(res, {
+        type: "fatal",
+        message: "Nenhum comando SQL encontrado.",
+        durationMs: Date.now() - globalStartedAt,
+      });
       res.end();
       return;
     }
 
     for (const item of statements) {
       if (isUnsupportedCommand(item.statement)) {
-        sendStreamEvent(res, { type: 'fatal', message: 'Comando de terminal gerado, não executável diretamente no banco: ' + item.statement, durationMs: Date.now() - globalStartedAt });
+        sendStreamEvent(res, {
+          type: "fatal",
+          message:
+            "Comando de terminal gerado, não executável diretamente no banco: " +
+            item.statement,
+          durationMs: Date.now() - globalStartedAt,
+        });
         res.end();
         return;
       }
     }
 
-    sendStreamEvent(res, { type: 'start', total: statements.length, startedAt: new Date(globalStartedAt).toISOString() });
+    sendStreamEvent(res, {
+      type: "start",
+      total: statements.length,
+      startedAt: new Date(globalStartedAt).toISOString(),
+    });
 
     let lastResult: any = null;
     let executedCount = 0;
@@ -223,61 +515,183 @@ async function executeScriptStream(config: OracleConnectionConfig, sql: string, 
       const startedAt = Date.now();
 
       sendStreamEvent(res, {
-        type: 'statement-start',
+        type: "statement-start",
         index: i + 1,
         total: statements.length,
         line: item.startLine,
         endLine: item.endLine,
         statement: rawStmt,
-        startedAt: new Date(startedAt).toISOString()
+        startedAt: new Date(startedAt).toISOString(),
       });
 
       try {
         if (isSqlPlusAdminCommand(rawStmt)) {
-          if (conn) { try { await conn.close(); } catch {} conn = null; }
+          if (conn) {
+            try {
+              await conn.close();
+            } catch {}
+            conn = null;
+          }
           const adminResult = await runSqlPlusAdminCommand(rawStmt, config);
           const durationMs = Date.now() - startedAt;
 
           if (!adminResult.ok) {
-            logs.push({ index: i + 1, line: item.startLine, endLine: item.endLine, status: 'error', statement: rawStmt, message: adminResult.message, durationMs });
-            sendStreamEvent(res, { type: 'statement-error', index: i + 1, line: item.startLine, endLine: item.endLine, statement: rawStmt, durationMs, message: adminResult.message });
-            sendStreamEvent(res, { type: 'done', durationMs: Date.now() - globalStartedAt, result: { ok: false, message: adminResult.message, failedStatement: rawStmt, executedCount, warningCount: warnings.length, warnings, logs } });
+            logs.push({
+              index: i + 1,
+              line: item.startLine,
+              endLine: item.endLine,
+              status: "error",
+              statement: rawStmt,
+              message: adminResult.message,
+              durationMs,
+            });
+            sendStreamEvent(res, {
+              type: "statement-error",
+              index: i + 1,
+              line: item.startLine,
+              endLine: item.endLine,
+              statement: rawStmt,
+              durationMs,
+              message: adminResult.message,
+            });
+            sendStreamEvent(res, {
+              type: "done",
+              durationMs: Date.now() - globalStartedAt,
+              result: {
+                ok: false,
+                message: adminResult.message,
+                failedStatement: rawStmt,
+                executedCount,
+                warningCount: warnings.length,
+                warnings,
+                logs,
+              },
+            });
             res.end();
             return;
           }
 
           executedCount++;
-          logs.push({ index: i + 1, line: item.startLine, endLine: item.endLine, status: 'success', statement: rawStmt, message: adminResult.message, durationMs, rowsAffected: 0, rowCount: 0 });
-          sendStreamEvent(res, { type: 'statement-success', index: i + 1, line: item.startLine, endLine: item.endLine, statement: rawStmt, durationMs, rowsAffected: 0, rowCount: 0, message: adminResult.message });
+          logs.push({
+            index: i + 1,
+            line: item.startLine,
+            endLine: item.endLine,
+            status: "success",
+            statement: rawStmt,
+            message: adminResult.message,
+            durationMs,
+            rowsAffected: 0,
+            rowCount: 0,
+          });
+          sendStreamEvent(res, {
+            type: "statement-success",
+            index: i + 1,
+            line: item.startLine,
+            endLine: item.endLine,
+            statement: rawStmt,
+            durationMs,
+            rowsAffected: 0,
+            rowCount: 0,
+            message: adminResult.message,
+          });
           continue;
         }
 
         if (!conn) conn = await getConnection(config);
         const stmt = convertSqlPlusCommand(rawStmt);
-        lastResult = await conn.execute(stmt, [], { outFormat: oracledb.OUT_FORMAT_OBJECT, autoCommit: false });
+        lastResult = await conn.execute(stmt, [], {
+          outFormat: oracledb.OUT_FORMAT_OBJECT,
+          autoCommit: false,
+        });
         executedCount++;
 
         const durationMs = Date.now() - startedAt;
         const rowCount = (lastResult.rows || []).length;
         const rowsAffected = lastResult.rowsAffected || 0;
 
-        logs.push({ index: i + 1, line: item.startLine, endLine: item.endLine, status: 'success', statement: rawStmt, message: 'Comando executado com sucesso.', durationMs, rowsAffected, rowCount });
-        sendStreamEvent(res, { type: 'statement-success', index: i + 1, line: item.startLine, endLine: item.endLine, statement: rawStmt, durationMs, rowsAffected, rowCount, message: 'Comando executado com sucesso.' });
+        logs.push({
+          index: i + 1,
+          line: item.startLine,
+          endLine: item.endLine,
+          status: "success",
+          statement: rawStmt,
+          message: "Comando executado com sucesso.",
+          durationMs,
+          rowsAffected,
+          rowCount,
+        });
+        sendStreamEvent(res, {
+          type: "statement-success",
+          index: i + 1,
+          line: item.startLine,
+          endLine: item.endLine,
+          statement: rawStmt,
+          durationMs,
+          rowsAffected,
+          rowCount,
+          message: "Comando executado com sucesso.",
+        });
       } catch (err: any) {
         const message = err?.message ?? String(err);
         const durationMs = Date.now() - startedAt;
 
         if (isIgnorableOracleError(rawStmt, err)) {
           warnings.push({ statement: rawStmt, message });
-          logs.push({ index: i + 1, line: item.startLine, endLine: item.endLine, status: 'warning', statement: rawStmt, message, durationMs });
-          sendStreamEvent(res, { type: 'statement-warning', index: i + 1, line: item.startLine, endLine: item.endLine, statement: rawStmt, durationMs, message });
+          logs.push({
+            index: i + 1,
+            line: item.startLine,
+            endLine: item.endLine,
+            status: "warning",
+            statement: rawStmt,
+            message,
+            durationMs,
+          });
+          sendStreamEvent(res, {
+            type: "statement-warning",
+            index: i + 1,
+            line: item.startLine,
+            endLine: item.endLine,
+            statement: rawStmt,
+            durationMs,
+            message,
+          });
           continue;
         }
 
-        logs.push({ index: i + 1, line: item.startLine, endLine: item.endLine, status: 'error', statement: rawStmt, message, durationMs });
-        sendStreamEvent(res, { type: 'statement-error', index: i + 1, line: item.startLine, endLine: item.endLine, statement: rawStmt, durationMs, message });
-        try { if (conn) await conn.rollback(); } catch {}
-        sendStreamEvent(res, { type: 'done', durationMs: Date.now() - globalStartedAt, result: { ok: false, message, failedStatement: rawStmt, executedCount, warningCount: warnings.length, warnings, logs } });
+        logs.push({
+          index: i + 1,
+          line: item.startLine,
+          endLine: item.endLine,
+          status: "error",
+          statement: rawStmt,
+          message,
+          durationMs,
+        });
+        sendStreamEvent(res, {
+          type: "statement-error",
+          index: i + 1,
+          line: item.startLine,
+          endLine: item.endLine,
+          statement: rawStmt,
+          durationMs,
+          message,
+        });
+        try {
+          if (conn) await conn.rollback();
+        } catch {}
+        sendStreamEvent(res, {
+          type: "done",
+          durationMs: Date.now() - globalStartedAt,
+          result: {
+            ok: false,
+            message,
+            failedStatement: rawStmt,
+            executedCount,
+            warningCount: warnings.length,
+            warnings,
+            logs,
+          },
+        });
         res.end();
         return;
       }
@@ -285,7 +699,7 @@ async function executeScriptStream(config: OracleConnectionConfig, sql: string, 
 
     if (conn) await conn.commit();
     sendStreamEvent(res, {
-      type: 'done',
+      type: "done",
       durationMs: Date.now() - globalStartedAt,
       result: {
         ok: true,
@@ -296,22 +710,44 @@ async function executeScriptStream(config: OracleConnectionConfig, sql: string, 
         rows: lastResult?.rows ?? [],
         rowsAffected: lastResult?.rowsAffected ?? 0,
         metaData: lastResult?.metaData ?? [],
-        lastResult: { rows: lastResult?.rows ?? [], rowsAffected: lastResult?.rowsAffected ?? 0, metaData: lastResult?.metaData ?? [] }
-      }
+        lastResult: {
+          rows: lastResult?.rows ?? [],
+          rowsAffected: lastResult?.rowsAffected ?? 0,
+          metaData: lastResult?.metaData ?? [],
+        },
+      },
     });
     res.end();
   } catch (err: any) {
-    if (conn) { try { await conn.rollback(); } catch {} }
-    sendStreamEvent(res, { type: 'fatal', message: err?.message ?? String(err), durationMs: Date.now() - globalStartedAt });
+    if (conn) {
+      try {
+        await conn.rollback();
+      } catch {}
+    }
+    sendStreamEvent(res, {
+      type: "fatal",
+      message: err?.message ?? String(err),
+      durationMs: Date.now() - globalStartedAt,
+    });
     res.end();
   } finally {
     if (conn) await conn.close();
   }
 }
 
-function batEscape(value: any) { return String(value || '').replace(/\r?\n/g, ' ').replace(/"/g, '""'); }
+function batEscape(value: any) {
+  return String(value || "")
+    .replace(/\r?\n/g, " ")
+    .replace(/"/g, '""');
+}
 function buildPatchBat(config: any) {
-  const oracleHome = batEscape(config.oracleHome); const oracleSid = batEscape(config.oracleSid); const patchDir = batEscape(config.patchDir); const workRoot = batEscape(config.workRoot || config.patchDir); const listenerName = batEscape(config.listenerName || 'LISTENER'); const autoStartDb = config.autoStartDb === false ? 'no' : 'yes'; const openAllPdbs = config.openAllPdbs === true ? 'yes' : 'no';
+  const oracleHome = batEscape(config.oracleHome);
+  const oracleSid = batEscape(config.oracleSid);
+  const patchDir = batEscape(config.patchDir);
+  const workRoot = batEscape(config.workRoot || config.patchDir);
+  const listenerName = batEscape(config.listenerName || "LISTENER");
+  const autoStartDb = config.autoStartDb === false ? "no" : "yes";
+  const openAllPdbs = config.openAllPdbs === true ? "yes" : "no";
   return `@echo off
 setlocal EnableExtensions EnableDelayedExpansion
 title Oracle 19c Patch Apply
@@ -420,64 +856,159 @@ exit /b 1
 function runPatchProcess(config: any) {
   return new Promise((resolve) => {
     try {
-      const missing: string[] = []; if (!String(config?.oracleHome || '').trim()) missing.push('Oracle Home'); if (!String(config?.oracleSid || '').trim()) missing.push('Oracle SID'); if (!String(config?.patchDir || '').trim()) missing.push('Diretório do patch');
-      if (missing.length) return resolve({ ok: false, message: 'Preencha: ' + missing.join(', ') + '.' });
-      const tempBat = path.join(os.tmpdir(), `oracle_patch_${Date.now()}.bat`); fs.writeFileSync(tempBat, buildPatchBat(config), 'utf8');
-      const child = spawn('cmd.exe', ['/c', tempBat], { windowsHide: true, cwd: String(config.workRoot || config.patchDir || os.tmpdir()) });
-      let output = '', logPath = '';
-      const appendChunk = (chunk: Buffer) => { const t = chunk.toString(); output += t; const m = t.match(/LOG_PATH=([^\r\n]+)/); if (m) logPath = m[1].trim(); };
-      child.stdout.on('data', appendChunk); child.stderr.on('data', appendChunk);
-      child.on('error', (err) => resolve({ ok: false, code: -1, message: err.message || String(err), output, logPath, logs: [{ index: 1, status: 'error', statement: 'Aplicação de patch Oracle', message: err.message || String(err), durationMs: 0 }] }));
-      child.on('close', (code) => { const ok = code === 0; resolve({ ok, code, message: ok ? 'Patch aplicado com sucesso.' : `Falha ao aplicar patch. Código ${code}.`, output: output.trim(), logPath, logs: [{ index: 1, status: ok ? 'success' : 'error', statement: 'Aplicação de patch Oracle', message: output.trim() || (ok ? 'Patch aplicado com sucesso.' : `Falha ao aplicar patch. Código ${code}.`), durationMs: 0 }] }); });
-    } catch (err: any) { resolve({ ok: false, code: -1, message: err?.message ?? String(err), output: '', logPath: '', logs: [{ index: 1, status: 'error', statement: 'Aplicação de patch Oracle', message: err?.message ?? String(err), durationMs: 0 }] }); }
+      const missing: string[] = [];
+      if (!String(config?.oracleHome || "").trim()) missing.push("Oracle Home");
+      if (!String(config?.oracleSid || "").trim()) missing.push("Oracle SID");
+      if (!String(config?.patchDir || "").trim())
+        missing.push("Diretório do patch");
+      if (missing.length)
+        return resolve({
+          ok: false,
+          message: "Preencha: " + missing.join(", ") + ".",
+        });
+      const tempBat = path.join(os.tmpdir(), `oracle_patch_${Date.now()}.bat`);
+      fs.writeFileSync(tempBat, buildPatchBat(config), "utf8");
+      const child = spawn("cmd.exe", ["/c", tempBat], {
+        windowsHide: true,
+        cwd: String(config.workRoot || config.patchDir || os.tmpdir()),
+      });
+      let output = "",
+        logPath = "";
+      const appendChunk = (chunk: Buffer) => {
+        const t = chunk.toString();
+        output += t;
+        const m = t.match(/LOG_PATH=([^\r\n]+)/);
+        if (m) logPath = m[1].trim();
+      };
+      child.stdout.on("data", appendChunk);
+      child.stderr.on("data", appendChunk);
+      child.on("error", (err) =>
+        resolve({
+          ok: false,
+          code: -1,
+          message: err.message || String(err),
+          output,
+          logPath,
+          logs: [
+            {
+              index: 1,
+              status: "error",
+              statement: "Aplicação de patch Oracle",
+              message: err.message || String(err),
+              durationMs: 0,
+            },
+          ],
+        }),
+      );
+      child.on("close", (code) => {
+        const ok = code === 0;
+        resolve({
+          ok,
+          code,
+          message: ok
+            ? "Patch aplicado com sucesso."
+            : `Falha ao aplicar patch. Código ${code}.`,
+          output: output.trim(),
+          logPath,
+          logs: [
+            {
+              index: 1,
+              status: ok ? "success" : "error",
+              statement: "Aplicação de patch Oracle",
+              message:
+                output.trim() ||
+                (ok
+                  ? "Patch aplicado com sucesso."
+                  : `Falha ao aplicar patch. Código ${code}.`),
+              durationMs: 0,
+            },
+          ],
+        });
+      });
+    } catch (err: any) {
+      resolve({
+        ok: false,
+        code: -1,
+        message: err?.message ?? String(err),
+        output: "",
+        logPath: "",
+        logs: [
+          {
+            index: 1,
+            status: "error",
+            statement: "Aplicação de patch Oracle",
+            message: err?.message ?? String(err),
+            durationMs: 0,
+          },
+        ],
+      });
+    }
   });
 }
 
 function getPatchLogPath(config: any) {
   const workRoot = String(config?.workRoot || config?.patchDir || os.tmpdir());
-  return path.join(workRoot, 'logs', 'run_patch.log');
+  return path.join(workRoot, "logs", "run_patch.log");
 }
 
 function writeJsonLine(res: http.ServerResponse, event: unknown) {
   res.write(`${JSON.stringify(event)}\n`);
 }
 
-function sendPatchLogLines(res: http.ServerResponse, text: string, startedAt: number) {
-  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  for (const line of normalized.split('\n')) {
-    if (line.trim()) writeJsonLine(res, { type: 'log', line, elapsedMs: Date.now() - startedAt });
+function sendPatchLogLines(
+  res: http.ServerResponse,
+  text: string,
+  startedAt: number,
+) {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  for (const line of normalized.split("\n")) {
+    if (line.trim())
+      writeJsonLine(res, {
+        type: "log",
+        line,
+        elapsedMs: Date.now() - startedAt,
+      });
   }
 }
 
 async function runPatchProcessStream(config: any, res: http.ServerResponse) {
   const startedAt = Date.now();
   res.writeHead(200, {
-    'Content-Type': 'application/x-ndjson; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'X-Accel-Buffering': 'no'
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "X-Accel-Buffering": "no",
   });
 
   try {
     const missing: string[] = [];
-    if (!String(config?.oracleHome || '').trim()) missing.push('Oracle Home');
-    if (!String(config?.oracleSid || '').trim()) missing.push('Oracle SID');
-    if (!String(config?.patchDir || '').trim()) missing.push('Diretório do patch');
+    if (!String(config?.oracleHome || "").trim()) missing.push("Oracle Home");
+    if (!String(config?.oracleSid || "").trim()) missing.push("Oracle SID");
+    if (!String(config?.patchDir || "").trim())
+      missing.push("Diretório do patch");
     if (missing.length) {
-      writeJsonLine(res, { type: 'fatal', message: 'Preencha: ' + missing.join(', ') + '.', durationMs: Date.now() - startedAt });
+      writeJsonLine(res, {
+        type: "fatal",
+        message: "Preencha: " + missing.join(", ") + ".",
+        durationMs: Date.now() - startedAt,
+      });
       return res.end();
     }
 
     const logPath = getPatchLogPath(config);
-    writeJsonLine(res, { type: 'start', startedAt: new Date(startedAt).toISOString(), logPath });
+    writeJsonLine(res, {
+      type: "start",
+      startedAt: new Date(startedAt).toISOString(),
+      logPath,
+    });
 
     const tempBat = path.join(os.tmpdir(), `oracle_patch_${Date.now()}.bat`);
-    fs.writeFileSync(tempBat, buildPatchBat(config), 'utf8');
+    fs.writeFileSync(tempBat, buildPatchBat(config), "utf8");
 
-    let output = '';
+    let output = "";
     let fileOffset = 0;
     let poller: NodeJS.Timeout | undefined;
 
@@ -487,18 +1018,25 @@ async function runPatchProcessStream(config: any, res: http.ServerResponse) {
         const stat = fs.statSync(logPath);
         if (stat.size < fileOffset) fileOffset = 0;
         if (stat.size === fileOffset) return;
-        const fd = fs.openSync(logPath, 'r');
+        const fd = fs.openSync(logPath, "r");
         const buffer = Buffer.alloc(stat.size - fileOffset);
         fs.readSync(fd, buffer, 0, buffer.length, fileOffset);
         fs.closeSync(fd);
         fileOffset = stat.size;
-        sendPatchLogLines(res, buffer.toString('utf8'), startedAt);
+        sendPatchLogLines(res, buffer.toString("utf8"), startedAt);
       } catch (err: any) {
-        writeJsonLine(res, { type: 'log', line: `[AVISO] Não foi possível ler o log em tempo real: ${err?.message ?? String(err)}`, elapsedMs: Date.now() - startedAt });
+        writeJsonLine(res, {
+          type: "log",
+          line: `[AVISO] Não foi possível ler o log em tempo real: ${err?.message ?? String(err)}`,
+          elapsedMs: Date.now() - startedAt,
+        });
       }
     };
 
-    const child = spawn('cmd.exe', ['/c', tempBat], { windowsHide: true, cwd: String(config.workRoot || config.patchDir || os.tmpdir()) });
+    const child = spawn("cmd.exe", ["/c", tempBat], {
+      windowsHide: true,
+      cwd: String(config.workRoot || config.patchDir || os.tmpdir()),
+    });
     poller = setInterval(flushLogFile, 500);
 
     const appendChunk = (chunk: Buffer) => {
@@ -507,18 +1045,22 @@ async function runPatchProcessStream(config: any, res: http.ServerResponse) {
       sendPatchLogLines(res, text, startedAt);
     };
 
-    child.stdout.on('data', appendChunk);
-    child.stderr.on('data', appendChunk);
+    child.stdout.on("data", appendChunk);
+    child.stderr.on("data", appendChunk);
 
-    child.on('error', (err) => {
+    child.on("error", (err) => {
       if (poller) clearInterval(poller);
       flushLogFile();
       const message = err.message || String(err);
-      writeJsonLine(res, { type: 'fatal', message, durationMs: Date.now() - startedAt });
+      writeJsonLine(res, {
+        type: "fatal",
+        message,
+        durationMs: Date.now() - startedAt,
+      });
       res.end();
     });
 
-    child.on('close', (code) => {
+    child.on("close", (code) => {
       if (poller) clearInterval(poller);
       flushLogFile();
       const ok = code === 0;
@@ -526,26 +1068,37 @@ async function runPatchProcessStream(config: any, res: http.ServerResponse) {
       const result = {
         ok,
         code,
-        message: ok ? 'Patch aplicado com sucesso.' : `Falha ao aplicar patch. Código ${code}.`,
+        message: ok
+          ? "Patch aplicado com sucesso."
+          : `Falha ao aplicar patch. Código ${code}.`,
         output: output.trim(),
         logPath,
-        logs: [{
-          index: 1,
-          status: ok ? 'success' : 'error',
-          statement: 'Aplicação de patch Oracle',
-          message: output.trim() || (ok ? 'Patch aplicado com sucesso.' : `Falha ao aplicar patch. Código ${code}.`),
-          durationMs
-        }]
+        logs: [
+          {
+            index: 1,
+            status: ok ? "success" : "error",
+            statement: "Aplicação de patch Oracle",
+            message:
+              output.trim() ||
+              (ok
+                ? "Patch aplicado com sucesso."
+                : `Falha ao aplicar patch. Código ${code}.`),
+            durationMs,
+          },
+        ],
       };
-      writeJsonLine(res, { type: 'done', result, durationMs });
+      writeJsonLine(res, { type: "done", result, durationMs });
       res.end();
     });
   } catch (err: any) {
-    writeJsonLine(res, { type: 'fatal', message: err?.message ?? String(err), durationMs: Date.now() - startedAt });
+    writeJsonLine(res, {
+      type: "fatal",
+      message: err?.message ?? String(err),
+      durationMs: Date.now() - startedAt,
+    });
     res.end();
   }
 }
-
 
 type AgentMetricSnapshot = {
   collectedAt: string;
@@ -572,7 +1125,7 @@ type AgentCollectorState = {
 const agentState: AgentCollectorState = {
   running: false,
   intervalSeconds: 30,
-  samplesCollected: 0
+  samplesCollected: 0,
 };
 
 const AGENT_OVERVIEW_SQL = `
@@ -634,21 +1187,25 @@ SELECT * FROM (
 `;
 
 function agentDataDir() {
-  const dir = path.join(process.cwd(), 'agent-data');
+  const dir = path.join(process.cwd(), "agent-data");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
 function agentMetricsFile() {
-  return path.join(agentDataDir(), 'metrics.jsonl');
+  return path.join(agentDataDir(), "metrics.jsonl");
 }
 
 async function runAgentSql(conn: any, sql: string) {
-  const result = await conn.execute(sql, [], { outFormat: oracledb.OUT_FORMAT_OBJECT });
+  const result = await conn.execute(sql, [], {
+    outFormat: oracledb.OUT_FORMAT_OBJECT,
+  });
   return result.rows || [];
 }
 
-async function collectAgentSnapshot(config: OracleConnectionConfig): Promise<AgentMetricSnapshot> {
+async function collectAgentSnapshot(
+  config: OracleConnectionConfig,
+): Promise<AgentMetricSnapshot> {
   let conn: any;
   const collectedAt = new Date().toISOString();
   try {
@@ -658,16 +1215,33 @@ async function collectAgentSnapshot(config: OracleConnectionConfig): Promise<Age
     const waits = await runAgentSql(conn, AGENT_WAITS_SQL);
     const topSql = await runAgentSql(conn, AGENT_TOP_SQL);
 
-    return { ok: true, collectedAt, host: os.hostname(), overview, tablespaces, waits, topSql };
+    return {
+      ok: true,
+      collectedAt,
+      host: os.hostname(),
+      overview,
+      tablespaces,
+      waits,
+      topSql,
+    };
   } catch (err: any) {
-    return { ok: false, collectedAt, host: os.hostname(), message: err?.message ?? String(err) };
+    return {
+      ok: false,
+      collectedAt,
+      host: os.hostname(),
+      message: err?.message ?? String(err),
+    };
   } finally {
     if (conn) await conn.close();
   }
 }
 
 function persistAgentSnapshot(snapshot: AgentMetricSnapshot) {
-  fs.appendFileSync(agentMetricsFile(), `${JSON.stringify(snapshot)}\n`, 'utf8');
+  fs.appendFileSync(
+    agentMetricsFile(),
+    `${JSON.stringify(snapshot)}\n`,
+    "utf8",
+  );
 }
 
 async function collectAndPersistAgentSnapshot() {
@@ -682,7 +1256,11 @@ async function collectAndPersistAgentSnapshot() {
 async function startAgentCollector(body: any) {
   const config = body?.config as OracleConnectionConfig;
   const intervalSeconds = Math.max(10, Number(body?.intervalSeconds || 30));
-  if (!config?.user || !config?.connectString) return { ok: false, message: 'Informe uma conexão Oracle válida antes de iniciar o Agent.' };
+  if (!config?.user || !config?.connectString)
+    return {
+      ok: false,
+      message: "Informe uma conexão Oracle válida antes de iniciar o Agent.",
+    };
 
   if (agentState.timer) clearInterval(agentState.timer);
   agentState.running = true;
@@ -693,15 +1271,27 @@ async function startAgentCollector(body: any) {
   agentState.config = config;
 
   await collectAndPersistAgentSnapshot();
-  agentState.timer = setInterval(() => { collectAndPersistAgentSnapshot().catch((err) => { agentState.lastError = err?.message ?? String(err); }); }, intervalSeconds * 1000);
-  return { ok: true, message: `Agent coletor iniciado. Intervalo: ${intervalSeconds}s.`, status: getAgentStatus() };
+  agentState.timer = setInterval(() => {
+    collectAndPersistAgentSnapshot().catch((err) => {
+      agentState.lastError = err?.message ?? String(err);
+    });
+  }, intervalSeconds * 1000);
+  return {
+    ok: true,
+    message: `Agent coletor iniciado. Intervalo: ${intervalSeconds}s.`,
+    status: getAgentStatus(),
+  };
 }
 
 function stopAgentCollector() {
   if (agentState.timer) clearInterval(agentState.timer);
   agentState.timer = undefined;
   agentState.running = false;
-  return { ok: true, message: 'Agent coletor parado.', status: getAgentStatus() };
+  return {
+    ok: true,
+    message: "Agent coletor parado.",
+    status: getAgentStatus(),
+  };
 }
 
 function getAgentStatus() {
@@ -713,35 +1303,88 @@ function getAgentStatus() {
     lastError: agentState.lastError,
     samplesCollected: agentState.samplesCollected,
     metricsFile: agentMetricsFile(),
-    host: os.hostname()
+    host: os.hostname(),
   };
 }
 
 function readRecentAgentMetrics(limit = 20) {
   const file = agentMetricsFile();
   if (!fs.existsSync(file)) return [];
-  const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
+  const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean);
   return lines.slice(-Math.max(1, Math.min(200, limit))).map((line) => {
-    try { return JSON.parse(line); } catch { return { ok: false, message: 'Linha inválida no arquivo de métricas.', raw: line }; }
+    try {
+      return JSON.parse(line);
+    } catch {
+      return {
+        ok: false,
+        message: "Linha inválida no arquivo de métricas.",
+        raw: line,
+      };
+    }
   });
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === 'OPTIONS') return send(res, 200, {});
+  if (req.method === "OPTIONS") return send(res, 200, {});
   try {
-    if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true, message: 'Oracle Bridge ativo.' });
-    if (req.method === 'GET' && req.url === '/agent/status') return send(res, 200, { ok: true, status: getAgentStatus() });
-    if (req.method === 'GET' && req.url?.startsWith('/agent/metrics')) { const url = new URL(req.url, 'http://127.0.0.1'); return send(res, 200, { ok: true, rows: readRecentAgentMetrics(Number(url.searchParams.get('limit') || 20)) }); }
-    if (req.method === 'POST' && req.url === '/agent/start') return send(res, 200, await startAgentCollector(await readBody(req)));
-    if (req.method === 'POST' && req.url === '/agent/stop') return send(res, 200, stopAgentCollector());
-    if (req.method === 'POST' && req.url === '/agent/collect-once') { const body = await readBody(req); const snapshot = await collectAgentSnapshot(body.config); persistAgentSnapshot(snapshot); return send(res, 200, { ok: snapshot.ok, snapshot, status: getAgentStatus() }); }
-    if (req.method === 'POST' && req.url === '/test-connection') return send(res, 200, await testConnection(await readBody(req)));
-    if (req.method === 'POST' && req.url === '/execute') { const payload = await readBody(req) as Payload; return send(res, 200, await executeScript(payload.config, payload.sql ?? '')); }
-    if (req.method === 'POST' && req.url === '/execute-script') { const payload = await readBody(req) as Payload; return send(res, 200, await executeScript(payload.config, payload.sql ?? '')); }
-    if (req.method === 'POST' && req.url === '/execute-script-stream') { const payload = await readBody(req) as Payload; return executeScriptStream(payload.config, payload.sql ?? '', res); }
-    if (req.method === 'POST' && req.url === '/run-patch') return send(res, 200, await runPatchProcess(await readBody(req)));
-    if (req.method === 'POST' && req.url === '/run-patch-stream') return runPatchProcessStream(await readBody(req), res);
-    return send(res, 404, { ok: false, message: 'Rota não encontrada.' });
-  } catch (err: any) { return send(res, 500, { ok: false, message: err?.message ?? String(err) }); }
+    if (req.method === "GET" && req.url === "/health")
+      return send(res, 200, { ok: true, message: "Oracle Bridge ativo." });
+    if (req.method === "GET" && req.url === "/agent/status")
+      return send(res, 200, { ok: true, status: getAgentStatus() });
+    if (req.method === "GET" && req.url?.startsWith("/agent/metrics")) {
+      const url = new URL(req.url, "http://127.0.0.1");
+      return send(res, 200, {
+        ok: true,
+        rows: readRecentAgentMetrics(
+          Number(url.searchParams.get("limit") || 20),
+        ),
+      });
+    }
+    if (req.method === "POST" && req.url === "/agent/start")
+      return send(res, 200, await startAgentCollector(await readBody(req)));
+    if (req.method === "POST" && req.url === "/agent/stop")
+      return send(res, 200, stopAgentCollector());
+    if (req.method === "POST" && req.url === "/agent/collect-once") {
+      const body = await readBody(req);
+      const snapshot = await collectAgentSnapshot(body.config);
+      persistAgentSnapshot(snapshot);
+      return send(res, 200, {
+        ok: snapshot.ok,
+        snapshot,
+        status: getAgentStatus(),
+      });
+    }
+    if (req.method === "POST" && req.url === "/test-connection")
+      return send(res, 200, await testConnection(await readBody(req)));
+    if (req.method === "POST" && req.url === "/execute") {
+      const payload = (await readBody(req)) as Payload;
+      return send(
+        res,
+        200,
+        await executeScript(payload.config, payload.sql ?? ""),
+      );
+    }
+    if (req.method === "POST" && req.url === "/execute-script") {
+      const payload = (await readBody(req)) as Payload;
+      return send(
+        res,
+        200,
+        await executeScript(payload.config, payload.sql ?? ""),
+      );
+    }
+    if (req.method === "POST" && req.url === "/execute-script-stream") {
+      const payload = (await readBody(req)) as Payload;
+      return executeScriptStream(payload.config, payload.sql ?? "", res);
+    }
+    if (req.method === "POST" && req.url === "/run-patch")
+      return send(res, 200, await runPatchProcess(await readBody(req)));
+    if (req.method === "POST" && req.url === "/run-patch-stream")
+      return runPatchProcessStream(await readBody(req), res);
+    return send(res, 404, { ok: false, message: "Rota não encontrada." });
+  } catch (err: any) {
+    return send(res, 500, { ok: false, message: err?.message ?? String(err) });
+  }
 });
-server.listen(PORT, '127.0.0.1', () => console.log(`Oracle bridge ativo em http://127.0.0.1:${PORT}`));
+server.listen(PORT, "127.0.0.1", () =>
+  console.log(`Oracle bridge ativo em http://127.0.0.1:${PORT}`),
+);
