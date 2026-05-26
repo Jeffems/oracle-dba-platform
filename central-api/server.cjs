@@ -451,9 +451,8 @@ process.on("SIGTERM", async () => {
   await prisma.$disconnect();
   process.exit(0);
 });
-server.listen(PORT, () => {
-  log("info", `Oracle DBA Central API v${VERSION} rodando`, {
-    url: `http://127.0.0.1:${PORT}`,
-    logFile: LOG_FILE,
-  });
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`API rodando na porta ${PORT}`);
 });
+
+
