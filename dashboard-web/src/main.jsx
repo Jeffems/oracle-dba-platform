@@ -14,9 +14,15 @@ import {
 import "./styles.css";
 
 const DEFAULT_API_URL =
-  localStorage.getItem("centralApiUrl") || "http://127.0.0.1:4090";
+  localStorage.getItem("centralApiUrl") ||
+  import.meta.env.VITE_API_URL ||
+  "http://127.0.0.1:4090";
+
 const DEFAULT_TOKEN =
-  localStorage.getItem("centralApiToken") || "dev-token-change-me";
+  localStorage.getItem("centralApiToken") ||
+  import.meta.env.VITE_API_TOKEN ||
+  "dev-token-change-me";
+
 function fmtDate(value) {
   if (!value) return "-";
   try {
