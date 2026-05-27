@@ -7,10 +7,10 @@
   "intervalSeconds": 60,
   "oracle": {
     "sqlplusPath": "sqlplus",
-    "user": "system",
+    "user": "sys",
     "password": "oracle",
     "connectString": "172.16.10.241:1521/orcl19",
-    "asSysdba": false
+    "asSysdba": true
   },
   "logDir": "C:\\ProgramData\\OracleDBAAgent\\logs"
 }

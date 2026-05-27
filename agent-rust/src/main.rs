@@ -46,6 +46,26 @@ struct OverviewRow {
     label: String,
 }
 
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommandJob {
+    id: String,
+    #[serde(rename = "agentId")]
+    agent_id: Option<String>,
+    #[serde(default)]
+    sql: Option<String>,
+    #[serde(default)]
+    r#type: Option<String>,
+    #[serde(rename = "allowDangerous", default)]
+    allow_dangerous: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaimResponse {
+    ok: bool,
+    command: Option<CommandJob>,
+}
+
 fn exe_dir() -> PathBuf {
     env::current_exe()
         .ok()
@@ -170,6 +190,42 @@ exit
     Ok(rows)
 }
 
+fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
+    let script = format!(
+        "ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,';\nset feedback on echo off verify off pagesize 500 linesize 400 trimspool on serveroutput on\nwhenever sqlerror exit sql.sqlcode\n{}\nexit\n",
+        sql
+    );
+
+    let sql_file = env::temp_dir().join(format!(
+        "oracle_dba_agent_script_{}.sql",
+        Utc::now().timestamp_millis()
+    ));
+
+    fs::write(&sql_file, script)
+        .with_context(|| format!("Falha ao criar script SQL temporário: {}", sql_file.display()))?;
+
+    let output = Command::new(&config.oracle.sqlplus_path)
+        .arg("-S")
+        .arg(sqlplus_connect_string(&config.oracle))
+        .arg(format!("@{}", sql_file.display()))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .context("Falha ao executar sqlplus para script remoto. Verifique Oracle Client/SQLPlus no PATH")?;
+
+    let _ = fs::remove_file(&sql_file);
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let combined = format!("{}\n{}", stdout, stderr).trim().to_string();
+
+    if combined.contains("ORA-") || combined.contains("SP2-") || !output.status.success() {
+        anyhow::bail!("SQLPlus retornou erro no script remoto: {}", combined);
+    }
+
+    Ok(combined)
+}
+
 fn hostname() -> String {
     env::var("COMPUTERNAME")
         .or_else(|_| env::var("HOSTNAME"))
@@ -219,7 +275,7 @@ async fn send_heartbeat(config: &Config) -> Result<()> {
         "agentId": config.agent_id,
         "customerName": config.customer_name,
         "environment": config.environment,
-        "version": "2.9.0-rust",
+        "version": "3.0.0-rust",
         "host": hostname(),
         "lastSeenAt": Utc::now().to_rfc3339()
     });
@@ -250,6 +306,82 @@ async fn send_metrics(config: &Config, snapshot: Value) -> Result<()> {
     Ok(())
 }
 
+
+async fn claim_command(config: &Config) -> Result<Option<CommandJob>> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
+    let url = format!("{}/api/commands/claim", config.api_url.trim_end_matches('/'));
+    let payload = json!({ "agentId": config.agent_id, "host": hostname(), "version": "3.0.0-rust" });
+    let res = client
+        .post(url)
+        .bearer_auth(&config.api_token)
+        .json(&payload)
+        .send()
+        .await?;
+    if !res.status().is_success() {
+        anyhow::bail!("Claim command respondeu HTTP {}: {}", res.status(), res.text().await.unwrap_or_default());
+    }
+    let body: ClaimResponse = res.json().await?;
+    if !body.ok {
+        anyhow::bail!("API retornou ok=false ao reivindicar comando");
+    }
+    Ok(body.command)
+}
+
+async fn send_command_result(config: &Config, command_id: &str, ok: bool, output: Option<String>, error_message: Option<String>) -> Result<()> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let url = format!("{}/api/commands/result", config.api_url.trim_end_matches('/'));
+    let payload = json!({
+        "id": command_id,
+        "agentId": config.agent_id,
+        "host": hostname(),
+        "ok": ok,
+        "output": output,
+        "error": error_message,
+        "finishedAt": Utc::now().to_rfc3339()
+    });
+    let res = client
+        .post(url)
+        .bearer_auth(&config.api_token)
+        .json(&payload)
+        .send()
+        .await?;
+    if !res.status().is_success() {
+        anyhow::bail!("Resultado do comando respondeu HTTP {}: {}", res.status(), res.text().await.unwrap_or_default());
+    }
+    Ok(())
+}
+
+async fn poll_and_execute_commands(config: &Config) {
+    let command = match claim_command(config).await {
+        Ok(command) => command,
+        Err(err) => {
+            error!(error = %err, "Falha ao consultar comandos pendentes");
+            return;
+        }
+    };
+
+    let Some(command) = command else { return; };
+    let sql = command.sql.clone().unwrap_or_default();
+    if sql.trim().is_empty() {
+        let _ = send_command_result(config, &command.id, false, None, Some("Comando sem SQL/script.".to_string())).await;
+        return;
+    }
+
+    info!(command_id = %command.id, "Executando comando remoto aprovado");
+    match execute_sqlplus_script(config, &sql) {
+        Ok(output) => {
+            if let Err(err) = send_command_result(config, &command.id, true, Some(output), None).await {
+                error!(error = %err, command_id = %command.id, "Falha ao enviar resultado do comando");
+            }
+        }
+        Err(err) => {
+            let error_message = err.to_string();
+            error!(error = %error_message, command_id = %command.id, "Comando remoto falhou");
+            let _ = send_command_result(config, &command.id, false, None, Some(error_message)).await;
+        }
+    }
+}
+
 async fn collect_once(config: &Config) -> Value {
     let collected_at = Utc::now().to_rfc3339();
     match run_sqlplus_metrics(config) {
@@ -257,7 +389,7 @@ async fn collect_once(config: &Config) -> Value {
             "agentId": config.agent_id,
             "customerName": config.customer_name,
             "environment": config.environment,
-            "version": "2.9.0-rust",
+            "version": "3.0.0-rust",
             "host": hostname(),
             "snapshot": {
                 "ok": true,
@@ -271,7 +403,7 @@ async fn collect_once(config: &Config) -> Value {
             "agentId": config.agent_id,
             "customerName": config.customer_name,
             "environment": config.environment,
-            "version": "2.9.0-rust",
+            "version": "3.0.0-rust",
             "host": hostname(),
             "snapshot": {
                 "ok": false,
@@ -286,7 +418,7 @@ async fn collect_once(config: &Config) -> Value {
 
 async fn run_loop() -> Result<()> {
     let config = load_config()?;
-    info!(agent_id = %config.agent_id, version = "2.9.0-rust", "Oracle DBA Agent Rust iniciado");
+    info!(agent_id = %config.agent_id, version = "3.0.0-rust", "Oracle DBA Agent Rust iniciado");
     loop {
         if let Err(err) = send_heartbeat(&config).await {
             error!(error = %err, "Falha ao enviar heartbeat");
@@ -302,6 +434,7 @@ async fn run_loop() -> Result<()> {
                 }
             }
         }
+        poll_and_execute_commands(&config).await;
         sleep(Duration::from_secs(config.interval_seconds.max(10))).await;
     }
 }

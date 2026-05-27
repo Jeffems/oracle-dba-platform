@@ -38,7 +38,7 @@ if ($Existing) {
 $Exe = Join-Path $InstallDir "oracle-dba-agent.exe"
 $BinPath = "`"$Exe`" --service --config `"$TargetConfig`""
 sc.exe create $ServiceName binPath= $BinPath start= auto DisplayName= $DisplayName | Out-Host
-sc.exe description $ServiceName "Oracle DBA Enterprise Agent em Rust - v2.9.0" | Out-Host
+sc.exe description $ServiceName "Oracle DBA Enterprise Agent em Rust - v3.0.0" | Out-Host
 sc.exe failure $ServiceName reset= 86400 actions= restart/60000/restart/60000/restart/300000 | Out-Host
 sc.exe start $ServiceName | Out-Host
 Write-Host "Serviço instalado e iniciado: $ServiceName" -ForegroundColor Green

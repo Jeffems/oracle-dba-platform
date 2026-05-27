@@ -1,6 +1,6 @@
 {
   "name": "oracle-dba-tauri-react",
-  "version": "2.9.0",
+  "version": "3.0.0",
   "private": true,
   "description": "Oracle DBA Desktop profissional",
   "type": "module",

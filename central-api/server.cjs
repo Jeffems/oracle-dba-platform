@@ -30,7 +30,7 @@ try { ({ PrismaClient } = require('@prisma/client')); } catch (err) {
 const prisma = new PrismaClient();
 const PORT = Number(process.env.PORT || process.env.RAILWAY_PORT || process.env.CENTRAL_API_PORT || 4090);
 const TOKEN = process.env.CENTRAL_API_TOKEN || 'dev-token-change-me';
-const VERSION = '2.9.0';
+const VERSION = '3.0.0';
 const startedAt = Date.now();
 const sseClients = new Set();
 const LOG_DIR = path.join(process.cwd(), 'logs');
@@ -40,11 +40,12 @@ const LOG_FILE = path.join(LOG_DIR, 'central-api.log');
 function log(level, message, meta = {}) {
   const row = { at: new Date().toISOString(), level, message, ...meta };
   const line = JSON.stringify(row);
-  fs.appendFileSync(LOG_FILE, line + '\n');
+  try { fs.appendFileSync(LOG_FILE, line + '\n'); } catch {}
   if (level === 'error') console.error(line); else console.log(line);
 }
 
 function send(res, status, body) {
+  if (res.headersSent) return;
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
@@ -86,8 +87,26 @@ function normalizeMetricRecord(row) {
     snapshot
   };
 }
+function normalizeCommand(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    type: row.type,
+    sql: row.sql,
+    status: row.status,
+    note: row.note,
+    allowDangerous: row.allowDangerous,
+    output: row.output,
+    error: row.error,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    startedAt: row.startedAt,
+    finishedAt: row.finishedAt
+  };
+}
 async function audit(action, details) {
-  await prisma.auditLog.create({ data: { action, details } });
+  try { await prisma.auditLog.create({ data: { action, details } }); } catch (err) { log('error', 'audit.failed', { action, error: err.message }); }
 }
 async function upsertAgent(body, agentId) {
   return prisma.agent.upsert({
@@ -117,6 +136,7 @@ async function summarizeInstances() {
   for (const agent of agents) {
     const latest = await prisma.metric.findFirst({ where: { agentId: agent.agentId }, orderBy: { receivedAt: 'desc' } });
     const samples = await prisma.metric.count({ where: { agentId: agent.agentId } });
+    const pendingCommands = await prisma.command.count({ where: { agentId: agent.agentId, status: { in: ['QUEUED', 'IN_PROGRESS'] } } });
     const snapshot = latest?.snapshot || null;
     rows.push({
       agentId: agent.agentId,
@@ -127,6 +147,7 @@ async function summarizeInstances() {
       version: latest?.version || agent.version,
       lastSeenAt: latest?.receivedAt || agent.lastSeenAt,
       samples,
+      pendingCommands,
       registered: true,
       latest: snapshot,
       activeSessions: metricValue(snapshot, 'ACTIVE_SESSIONS'),
@@ -167,13 +188,15 @@ function calcAlerts(instances) {
 }
 async function persistActiveAlerts(alerts) {
   for (const alert of alerts) {
-    await prisma.alert.create({ data: { agentId: alert.agentId || null, level: alert.level, message: alert.message } });
+    const recent = await prisma.alert.findFirst({ where: { agentId: alert.agentId || null, message: alert.message, createdAt: { gte: new Date(Date.now() - 10 * 60 * 1000) } } });
+    if (!recent) await prisma.alert.create({ data: { agentId: alert.agentId || null, level: alert.level, message: alert.message } });
   }
 }
 async function currentState() {
   const clients = await summarizeInstances();
   const alerts = calcAlerts(clients);
-  return { ok: true, version: VERSION, persistence: 'postgresql/prisma', clients, alerts, now: new Date().toISOString() };
+  const commands = await prisma.command.findMany({ orderBy: { createdAt: 'desc' }, take: 50 });
+  return { ok: true, version: VERSION, persistence: 'postgresql/prisma', clients, alerts, commands: commands.map(normalizeCommand), now: new Date().toISOString() };
 }
 function broadcast(type, payload) {
   const data = `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`;
@@ -183,6 +206,10 @@ function broadcast(type, payload) {
 }
 async function dbHealth() {
   try { await prisma.$queryRaw`SELECT 1`; return { ok: true }; } catch (err) { return { ok: false, message: err.message }; }
+}
+function isDangerousSql(sql) {
+  const s = String(sql || '').toLowerCase();
+  return /\b(drop|truncate|shutdown|startup|alter\s+system|alter\s+database|delete\s+from|update\s+\w+\s+set)\b/.test(s);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -210,7 +237,6 @@ const server = http.createServer(async (req, res) => {
       broadcast('state', await currentState());
       return send(res, 201, { ok: true, agent });
     }
-
     if (req.method === 'POST' && req.url === '/api/heartbeat') {
       const body = await readJson(req);
       const agentId = String(body.agentId || body.agent || 'unknown-agent');
@@ -240,7 +266,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && (req.url === '/api/clients' || req.url?.startsWith('/api/instances'))) return send(res, 200, { ok: true, rows: await summarizeInstances() });
     if (req.method === 'GET' && req.url?.startsWith('/api/metrics')) {
       const url = new URL(req.url, `http://${req.headers.host}`);
-      const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)));
+      const limit = Math.max(1, Math.min(1000, Number(url.searchParams.get('limit') || 200)));
       const agentId = url.searchParams.get('agentId') || undefined;
       const rows = await prisma.metric.findMany({ where: agentId ? { agentId } : {}, orderBy: { receivedAt: 'desc' }, take: limit });
       return send(res, 200, { ok: true, rows: rows.map(normalizeMetricRecord) });
@@ -253,12 +279,48 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url?.startsWith('/api/state')) return send(res, 200, await currentState());
     if (req.method === 'POST' && req.url === '/api/scripts/queue') {
       const body = await readJson(req);
-      const command = await prisma.command.create({ data: { agentId: body.agentId || null, type: body.type || 'SQL_REVIEW_REQUIRED', sql: body.sql || '', status: 'PENDING_APPROVAL', note: body.note || 'Comando criado para auditoria. Execução remota automática ainda bloqueada por segurança.' } });
-      await audit('script.queue', command);
-      broadcast('command', command);
-      return send(res, 201, { ok: true, command });
+      const agentId = String(body.agentId || '').trim();
+      const sql = String(body.sql || '').trim();
+      const allowDangerous = Boolean(body.allowDangerous);
+      if (!agentId) return send(res, 400, { ok: false, message: 'Informe o Agent.' });
+      if (!sql) return send(res, 400, { ok: false, message: 'Informe o SQL/script.' });
+      const dangerous = isDangerousSql(sql);
+      const status = dangerous && !allowDangerous ? 'BLOCKED_REVIEW_REQUIRED' : 'QUEUED';
+      const note = dangerous && !allowDangerous ? 'Script bloqueado por conter comando sensível. Marque liberação de comandos críticos para enfileirar.' : (body.note || 'Script enfileirado para execução pelo Agent.');
+      const command = await prisma.command.create({ data: { agentId, type: body.type || 'SQL_SCRIPT', sql, status, allowDangerous, note } });
+      await audit('script.queue', normalizeCommand(command));
+      broadcast('command', normalizeCommand(command));
+      return send(res, 201, { ok: status === 'QUEUED', command: normalizeCommand(command), blocked: status !== 'QUEUED', message: note });
     }
-    if (req.method === 'GET' && req.url?.startsWith('/api/scripts')) return send(res, 200, { ok: true, rows: await prisma.command.findMany({ orderBy: { createdAt: 'desc' }, take: 100 }) });
+    if (req.method === 'GET' && req.url?.startsWith('/api/scripts')) {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const agentId = url.searchParams.get('agentId') || undefined;
+      const where = agentId ? { agentId } : {};
+      const rows = await prisma.command.findMany({ where, orderBy: { createdAt: 'desc' }, take: 100 });
+      return send(res, 200, { ok: true, rows: rows.map(normalizeCommand) });
+    }
+    if (req.method === 'POST' && req.url === '/api/commands/claim') {
+      const body = await readJson(req);
+      const agentId = String(body.agentId || '').trim();
+      if (!agentId) return send(res, 400, { ok: false, message: 'agentId obrigatório.' });
+      const found = await prisma.command.findFirst({ where: { status: 'QUEUED', OR: [{ agentId }, { agentId: null }] }, orderBy: { createdAt: 'asc' } });
+      if (!found) return send(res, 200, { ok: true, command: null });
+      const claimed = await prisma.command.update({ where: { id: found.id }, data: { status: 'IN_PROGRESS', startedAt: new Date(), note: found.note || `Reivindicado por ${agentId}` } });
+      await audit('command.claim', { id: claimed.id, agentId });
+      broadcast('command', normalizeCommand(claimed));
+      return send(res, 200, { ok: true, command: normalizeCommand(claimed) });
+    }
+    if (req.method === 'POST' && req.url === '/api/commands/result') {
+      const body = await readJson(req);
+      const id = String(body.id || '').trim();
+      if (!id) return send(res, 400, { ok: false, message: 'id do comando obrigatório.' });
+      const ok = Boolean(body.ok);
+      const updated = await prisma.command.update({ where: { id }, data: { status: ok ? 'SUCCESS' : 'FAILED', output: body.output ? String(body.output).slice(0, 200000) : null, error: body.error ? String(body.error).slice(0, 200000) : null, finishedAt: new Date() } });
+      await audit('command.result', { id, ok, agentId: body.agentId || null });
+      broadcast('command', normalizeCommand(updated));
+      broadcast('state', await currentState());
+      return send(res, 200, { ok: true, command: normalizeCommand(updated) });
+    }
     return send(res, 404, { ok: false, message: 'Rota não encontrada.' });
   } catch (err) {
     log('error', 'request.failed', { requestId, method: req.method, url: req.url, error: err.message });
