@@ -2,14 +2,14 @@
   "agentId": "CLIENTE_001_ORACLE19_PROD",
   "customerName": "Cliente Exemplo",
   "environment": "PRODUCAO",
-  "apiUrl": "central-api-production-cedc.up.railway.app",
+  "apiUrl": "https://central-api-production-cedc.up.railway.app",
   "apiToken": "dev-token-change-me",
   "intervalSeconds": 60,
   "oracle": {
     "sqlplusPath": "sqlplus",
     "user": "system",
     "password": "oracle",
-    "connectString": " 172.16.10.241:1521/ORCL19",
+    "connectString": "172.16.10.241:1521/orcl19",
     "asSysdba": false
   },
   "logDir": "C:\\ProgramData\\OracleDBAAgent\\logs"

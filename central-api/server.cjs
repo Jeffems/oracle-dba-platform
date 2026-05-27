@@ -40,7 +40,7 @@ try {
 
 const prisma = new PrismaClient();
 const PORT = Number(process.env.PORT || process.env.RAILWAY_PORT || process.env.CENTRAL_API_PORT || 4090);
-
+const PORT = Number(process.env.PORT || process.env.CENTRAL_API_PORT || 4090);
 const TOKEN = process.env.CENTRAL_API_TOKEN || "dev-token-change-me";
 const VERSION = "2.8.0";
 const startedAt = Date.now();
@@ -453,7 +453,8 @@ process.on("SIGTERM", async () => {
   process.exit(0);
 });
 server.listen(PORT, '0.0.0.0', () => {
-  console.log('PORT env:', process.env.PORT);
-  console.log('RAILWAY_PORT env:', process.env.RAILWAY_PORT);
-  console.log(`API rodando na porta ${PORT}`);
+  log('info', `Oracle DBA Central API v${VERSION} rodando`, {
+    url: `http://0.0.0.0:${PORT}`,
+    logFile: LOG_FILE
+  });
 });
