@@ -100,6 +100,15 @@ SELECT 'LOCKS_WAITING=' || COUNT(*) FROM v$lock WHERE request > 0;
 SELECT 'INVALID_OBJECTS=' || COUNT(*) FROM dba_objects WHERE status = 'INVALID';
 SELECT 'TABLESPACE_MAX_USED_PCT=' || NVL(ROUND(MAX(used_percent),2),0) FROM dba_tablespace_usage_metrics;
 SELECT 'LONG_OPS=' || COUNT(*) FROM v$session_longops WHERE totalwork > 0 AND sofar < totalwork;
+SELECT 'DB_CPU_SECONDS=' || NVL(ROUND(MAX(CASE WHEN stat_name = 'DB CPU' THEN value END)/1000000,2),0) FROM v$sys_time_model;
+SELECT 'DB_TIME_SECONDS=' || NVL(ROUND(MAX(CASE WHEN stat_name = 'DB time' THEN value END)/1000000,2),0) FROM v$sys_time_model;
+SELECT 'LOGICAL_READS=' || NVL(MAX(CASE WHEN name = 'session logical reads' THEN value END),0) FROM v$sysstat;
+SELECT 'PHYSICAL_READS=' || NVL(MAX(CASE WHEN name = 'physical reads' THEN value END),0) FROM v$sysstat;
+SELECT 'EXECUTIONS=' || NVL(MAX(CASE WHEN name = 'execute count' THEN value END),0) FROM v$sysstat;
+SELECT 'PARSE_COUNT_TOTAL=' || NVL(MAX(CASE WHEN name = 'parse count (total)' THEN value END),0) FROM v$sysstat;
+SELECT 'REDO_SIZE_MB=' || NVL(ROUND(MAX(CASE WHEN name = 'redo size' THEN value END)/1024/1024,2),0) FROM v$sysstat;
+SELECT 'PGA_ALLOC_MB=' || NVL(ROUND(value/1024/1024,2),0) FROM v$pgastat WHERE name = 'total PGA allocated';
+SELECT 'SGA_MB=' || NVL(ROUND(SUM(value)/1024/1024,2),0) FROM v$sga;
 exit
 "#;
 
@@ -131,7 +140,6 @@ exit
     }
 
     let mut rows = Vec::new();
-
     for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
         if let Some((key, value)) = line.split_once('=') {
             let label = match key {
@@ -141,9 +149,17 @@ exit
                 "INVALID_OBJECTS" => "Objetos inválidos",
                 "TABLESPACE_MAX_USED_PCT" => "Maior uso de tablespace (%)",
                 "LONG_OPS" => "Operações longas ativas",
+                "DB_CPU_SECONDS" => "DB CPU acumulado (s)",
+                "DB_TIME_SECONDS" => "DB Time acumulado (s)",
+                "LOGICAL_READS" => "Leituras lógicas acumuladas",
+                "PHYSICAL_READS" => "Leituras físicas acumuladas",
+                "EXECUTIONS" => "Execuções acumuladas",
+                "PARSE_COUNT_TOTAL" => "Parses acumulados",
+                "REDO_SIZE_MB" => "Redo gerado acumulado (MB)",
+                "PGA_ALLOC_MB" => "PGA alocada (MB)",
+                "SGA_MB" => "SGA total (MB)",
                 _ => key,
             };
-
             rows.push(OverviewRow {
                 metric: key.to_string(),
                 value: value.trim().replace(',', ".").parse::<f64>().unwrap_or(0.0),
@@ -151,7 +167,6 @@ exit
             });
         }
     }
-
     Ok(rows)
 }
 
@@ -204,7 +219,7 @@ async fn send_heartbeat(config: &Config) -> Result<()> {
         "agentId": config.agent_id,
         "customerName": config.customer_name,
         "environment": config.environment,
-        "version": "2.8.0-rust",
+        "version": "2.9.0-rust",
         "host": hostname(),
         "lastSeenAt": Utc::now().to_rfc3339()
     });
@@ -242,7 +257,7 @@ async fn collect_once(config: &Config) -> Value {
             "agentId": config.agent_id,
             "customerName": config.customer_name,
             "environment": config.environment,
-            "version": "2.8.0-rust",
+            "version": "2.9.0-rust",
             "host": hostname(),
             "snapshot": {
                 "ok": true,
@@ -256,7 +271,7 @@ async fn collect_once(config: &Config) -> Value {
             "agentId": config.agent_id,
             "customerName": config.customer_name,
             "environment": config.environment,
-            "version": "2.8.0-rust",
+            "version": "2.9.0-rust",
             "host": hostname(),
             "snapshot": {
                 "ok": false,
@@ -271,7 +286,7 @@ async fn collect_once(config: &Config) -> Value {
 
 async fn run_loop() -> Result<()> {
     let config = load_config()?;
-    info!(agent_id = %config.agent_id, version = "2.8.0-rust", "Oracle DBA Agent Rust iniciado");
+    info!(agent_id = %config.agent_id, version = "2.9.0-rust", "Oracle DBA Agent Rust iniciado");
     loop {
         if let Err(err) = send_heartbeat(&config).await {
             error!(error = %err, "Falha ao enviar heartbeat");

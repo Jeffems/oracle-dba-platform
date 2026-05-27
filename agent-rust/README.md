@@ -1,8 +1,8 @@
-# Oracle DBA Agent Rust — v2.8.0
+# Oracle DBA Agent Rust — v2.9.0
 
 Agent Enterprise em Rust para rodar como Windows Service nativo.
 
-## Recursos da v2.8.0
+## Recursos da v2.9.0
 
 - Serviço Windows nativo, sem NSSM.
 - Instalação em `C:\Program Files\OracleDBAAgent`.
@@ -58,5 +58,5 @@ npm run agent:rust:package
 O ZIP será criado em:
 
 ```txt
-dist-agent\OracleDBAAgentRust-v2.8.0.zip
+dist-agent\OracleDBAAgentRust-v2.9.0.zip
 ```

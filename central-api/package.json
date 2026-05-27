@@ -1,16 +1,16 @@
 {
   "name": "oracle-dba-central-api",
-  "version": "2.8.0",
+  "version": "2.9.0",
   "private": true,
   "type": "commonjs",
   "scripts": {
     "start": "node server.cjs",
     "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
     "prisma:migrate": "prisma migrate deploy"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
-    "prisma": "^6.19.3",
-    "ws": "^8.18.0"
+    "prisma": "^6.19.3"
   }
 }
