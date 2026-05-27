@@ -92,6 +92,7 @@ fn sqlplus_connect_string(oracle: &OracleConfig) -> String {
 
 fn run_sqlplus_metrics(config: &Config) -> Result<Vec<OverviewRow>> {
     let script = r#"
+ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,';
 set heading off feedback off verify off echo off pagesize 0 linesize 400 trimspool on serveroutput off
 SELECT 'ACTIVE_SESSIONS=' || COUNT(*) FROM v$session WHERE status = 'ACTIVE' AND type = 'USER';
 SELECT 'BLOCKED_SESSIONS=' || COUNT(*) FROM v$session WHERE blocking_session IS NOT NULL;
@@ -102,22 +103,24 @@ SELECT 'LONG_OPS=' || COUNT(*) FROM v$session_longops WHERE totalwork > 0 AND so
 exit
 "#;
 
+    let sql_file = env::temp_dir().join(format!(
+        "oracle_dba_agent_metrics_{}.sql",
+        Utc::now().timestamp_millis()
+    ));
+
+    fs::write(&sql_file, script)
+        .with_context(|| format!("Falha ao criar arquivo SQL temporário: {}", sql_file.display()))?;
+
     let output = Command::new(&config.oracle.sqlplus_path)
         .arg("-S")
         .arg(sqlplus_connect_string(&config.oracle))
-        .arg("@-")
-        .stdin(std::process::Stdio::piped())
+        .arg(format!("@{}", sql_file.display()))
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .spawn()
-        .and_then(|mut child| {
-            use std::io::Write;
-            if let Some(stdin) = child.stdin.as_mut() {
-                stdin.write_all(script.as_bytes())?;
-            }
-            child.wait_with_output()
-        })
+        .output()
         .context("Falha ao executar sqlplus. Verifique Oracle Client/SQLPlus no PATH")?;
+
+    let _ = fs::remove_file(&sql_file);
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -128,6 +131,7 @@ exit
     }
 
     let mut rows = Vec::new();
+
     for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
         if let Some((key, value)) = line.split_once('=') {
             let label = match key {
@@ -139,6 +143,7 @@ exit
                 "LONG_OPS" => "Operações longas ativas",
                 _ => key,
             };
+
             rows.push(OverviewRow {
                 metric: key.to_string(),
                 value: value.trim().replace(',', ".").parse::<f64>().unwrap_or(0.0),
@@ -146,6 +151,7 @@ exit
             });
         }
     }
+
     Ok(rows)
 }
 
