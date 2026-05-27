@@ -39,7 +39,7 @@ try {
 }
 
 const prisma = new PrismaClient();
-const PORT = Number(process.env.PORT || process.env.RAILWAY_PORT || process.env.CENTRAL_API_PORT || 4090);
+//const PORT = Number(process.env.PORT || process.env.RAILWAY_PORT || process.env.CENTRAL_API_PORT || 4090);
 const PORT = Number(process.env.PORT || process.env.CENTRAL_API_PORT || 4090);
 const TOKEN = process.env.CENTRAL_API_TOKEN || "dev-token-change-me";
 const VERSION = "2.8.0";
