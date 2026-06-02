@@ -61,16 +61,24 @@ function parseCsvLine(line: string): string[] {
 }
 
 function looksLikeCsv(text: string) {
+  // O SQLPlus com markup csv on sempre coloca aspas nos valores.
+  // Basta a primeira linha não-vazia ter aspas para ser CSV válido
+  // (funciona para resultados de coluna única também).
   const firstLine = text.split(/\r?\n/).find((line) => line.trim());
-  return Boolean(firstLine && firstLine.includes(',') && firstLine.includes('"'));
+  return Boolean(firstLine && firstLine.includes('"'));
 }
 
 function csvToResult(text: string): QueryResult | null {
   const lines = text
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .filter((line) => !/^Session altered\.?$/i.test(line));
+    .map((line) => line.trimEnd())           // preserva espaços internos, só remove trailing
+    .filter((line) => {
+      const t = line.trim();
+      // remove linhas realmente vazias e ruídos do SQLPlus
+      return t.length > 0
+        && !/^Session altered\.?$/i.test(t)
+        && !/^Commit complete\.?$/i.test(t);
+    });
 
   if (lines.length < 1 || !looksLikeCsv(lines.join('\n'))) return null;
 

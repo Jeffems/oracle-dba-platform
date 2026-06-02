@@ -46,6 +46,7 @@ struct OverviewRow {
     label: String,
 }
 
+
 #[derive(Debug, Clone, Deserialize)]
 struct CommandJob {
     id: String,
@@ -63,14 +64,6 @@ struct CommandJob {
 struct ClaimResponse {
     ok: bool,
     command: Option<CommandJob>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct SqlExecutionResult {
-    message: String,
-    output: String,
-    columns: Vec<String>,
-    rows: Vec<Vec<String>>,
 }
 
 fn exe_dir() -> PathBuf {
@@ -211,23 +204,17 @@ fn is_query_sql(sql: &str) -> bool {
     lower.starts_with("select ") || lower.starts_with("with ")
 }
 
-fn clean_sqlplus_output(output: &str) -> String {
+/// Remove linhas de ruído do SQLPlus (session altered, commit complete, linhas vazias).
+/// Usado apenas para mensagens de erro — nunca aplicar sobre CSV de resultado.
+fn clean_sqlplus_noise(output: &str) -> String {
     output
         .lines()
         .map(str::trim_end)
         .filter(|line| {
             let trimmed = line.trim();
-            let normalized = trimmed
-                .replace('�', "ã")
-                .to_lowercase();
-
             !trimmed.is_empty()
-                && !normalized.contains("session altered")
-                && !normalized.contains("sessão alterada")
-                && !normalized.contains("sessao alterada")
-                && !normalized.contains("commit complete")
-                && !normalized.contains("confirmação concluída")
-                && !normalized.contains("confirmacao concluida")
+                && !trimmed.eq_ignore_ascii_case("session altered.")
+                && !trimmed.eq_ignore_ascii_case("commit complete.")
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -235,81 +222,53 @@ fn clean_sqlplus_output(output: &str) -> String {
         .to_string()
 }
 
-fn parse_csv_line(line: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    let mut current = String::new();
-    let mut chars = line.chars().peekable();
-    let mut in_quotes = false;
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' => {
-                if in_quotes && chars.peek() == Some(&'"') {
-                    current.push('"');
-                    chars.next();
-                } else {
-                    in_quotes = !in_quotes;
-                }
-            }
-            ',' if !in_quotes => {
-                values.push(current.trim().to_string());
-                current.clear();
-            }
-            _ => current.push(ch),
-        }
-    }
-
-    values.push(current.trim().to_string());
-    values
+/// Retorna true se o texto de saída do SQLPlus tem alguma linha de erro Oracle.
+fn has_oracle_error(text: &str) -> bool {
+    text.contains("ORA-") || text.contains("SP2-")
 }
 
-fn parse_sqlplus_csv(output: &str) -> (Vec<String>, Vec<Vec<String>>) {
-    let cleaned = clean_sqlplus_output(output);
-    let mut lines = cleaned
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with("SQL>"))
-        .collect::<Vec<_>>();
-
-    if lines.is_empty() {
-        return (Vec::new(), Vec::new());
-    }
-
-    let header = parse_csv_line(lines[0])
-        .into_iter()
-        .map(|c| c.trim_matches('"').to_string())
-        .collect::<Vec<_>>();
-
-    let rows = lines
-        .drain(1..)
-        .map(parse_csv_line)
-        .map(|cols| cols.into_iter().map(|v| v.trim_matches('"').to_string()).collect::<Vec<_>>())
-        .filter(|cols| !cols.is_empty())
-        .collect::<Vec<_>>();
-
-    (header, rows)
-}
-
-fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<SqlExecutionResult> {
+fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
     let is_query = is_query_sql(sql);
-  let script = if is_query {
-    format!(
-        "set echo off verify off feedback off pagesize 50000 linesize 32767 trimspool on tab off termout on\nset markup csv on delimiter , quote on\nwhenever sqlerror exit sql.sqlcode\n{}\nexit\n",
-        sql
-    )
-} else {
-    format!(
-        "set echo off verify off feedback off heading off pagesize 0 linesize 400 trimspool on serveroutput on termout on\nwhenever sqlerror exit sql.sqlcode\n{}\ncommit;\nexit\n",
-        sql
-    )
-};
+    let timestamp = Utc::now().timestamp_millis();
+    let sql_file = env::temp_dir().join(format!("oracle_dba_agent_script_{}.sql", timestamp));
+    let result_file = env::temp_dir().join(format!("oracle_dba_agent_result_{}.csv", timestamp));
 
-    let sql_file = env::temp_dir().join(format!(
-        "oracle_dba_agent_script_{}.sql",
-        Utc::now().timestamp_millis()
-    ));
+    // SQLPlus no Windows exige barras normais no caminho do spool
+    let result_file_for_sqlplus = result_file.display().to_string().replace('\\', "/");
 
-    fs::write(&sql_file, script)
+    let script = if is_query {
+        // Para SELECTs: markup csv gera cabeçalho + linhas entre aspas.
+        // termout off impede que o SQLPlus duplique o output no stdout — o resultado
+        // fica SOMENTE no arquivo de spool.
+        format!(
+            r#"set echo off verify off feedback off pagesize 50000 linesize 32767 trimspool on tab off termout off
+set markup csv on delimiter , quote on
+whenever sqlerror exit sql.sqlcode
+spool "{}"
+{}
+spool off
+exit
+"#,
+            result_file_for_sqlplus,
+            sql
+        )
+    } else {
+        // Para DDL/DML: capturamos serveroutput e o resultado do commit no spool.
+        format!(
+            r#"set echo off verify off feedback off heading off pagesize 0 linesize 400 trimspool on serveroutput on termout off
+whenever sqlerror exit sql.sqlcode
+spool "{}"
+{}
+commit;
+spool off
+exit
+"#,
+            result_file_for_sqlplus,
+            sql
+        )
+    };
+
+    fs::write(&sql_file, &script)
         .with_context(|| format!("Falha ao criar script SQL temporário: {}", sql_file.display()))?;
 
     let output = Command::new(&config.oracle.sqlplus_path)
@@ -321,40 +280,34 @@ fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<SqlExecutionResu
         .output()
         .context("Falha ao executar sqlplus para script remoto. Verifique Oracle Client/SQLPlus no PATH")?;
 
-    let _ = fs::remove_file(&sql_file);
-
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let combined = format!("{}\n{}", stdout, stderr).trim().to_string();
 
-    if combined.contains("ORA-") || combined.contains("SP2-") || !output.status.success() {
-        anyhow::bail!("{}", clean_sqlplus_output(&combined));
+    // Lê o arquivo de spool ANTES de remover — é aqui que está o resultado real
+    let spooled = fs::read_to_string(&result_file).unwrap_or_default();
+
+    let _ = fs::remove_file(&sql_file);
+    let _ = fs::remove_file(&result_file);
+
+    // Para detectar erros combinamos stdout + stderr + spool.
+    // Usamos clean_sqlplus_noise só para a mensagem de erro — nunca no CSV.
+    let combined_for_error = format!("{}\n{}\n{}", stdout, stderr, spooled);
+    if has_oracle_error(&combined_for_error) || !output.status.success() {
+        let error_msg = clean_sqlplus_noise(&combined_for_error);
+        anyhow::bail!("{}", error_msg);
     }
 
     if is_query {
-        let (columns, rows) = parse_sqlplus_csv(&stdout);
-        if rows.is_empty() {
-            Ok(SqlExecutionResult {
-                message: "Consulta executada sem linhas retornadas.".to_string(),
-                output: clean_sqlplus_output(&stdout),
-                columns,
-                rows,
-            })
+        // O CSV vem do spool; preservamos exatamente como o SQLPlus gravou,
+        // apenas removendo linhas completamente vazias no início/fim.
+        let csv = spooled.trim().to_string();
+        if csv.is_empty() {
+            Ok("Consulta executada sem linhas retornadas.".to_string())
         } else {
-            Ok(SqlExecutionResult {
-                message: "Consulta executada com sucesso.".to_string(),
-                output: clean_sqlplus_output(&stdout),
-                columns,
-                rows,
-            })
+            Ok(csv)
         }
     } else {
-        Ok(SqlExecutionResult {
-            message: "Comando executado com sucesso.".to_string(),
-            output: "Comando executado com sucesso.".to_string(),
-            columns: Vec::new(),
-            rows: Vec::new(),
-        })
+        Ok("Comando executado com sucesso.".to_string())
     }
 }
 
@@ -407,7 +360,7 @@ async fn send_heartbeat(config: &Config) -> Result<()> {
         "agentId": config.agent_id,
         "customerName": config.customer_name,
         "environment": config.environment,
-        "version": "3.2.2-rust",
+        "version": "3.0.0-rust",
         "host": hostname(),
         "lastSeenAt": Utc::now().to_rfc3339()
     });
@@ -438,10 +391,11 @@ async fn send_metrics(config: &Config, snapshot: Value) -> Result<()> {
     Ok(())
 }
 
+
 async fn claim_command(config: &Config) -> Result<Option<CommandJob>> {
     let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
     let url = format!("{}/api/commands/claim", config.api_url.trim_end_matches('/'));
-    let payload = json!({ "agentId": config.agent_id, "host": hostname(), "version": "3.2.2-rust" });
+    let payload = json!({ "agentId": config.agent_id, "host": hostname(), "version": "3.0.0-rust" });
     let res = client
         .post(url)
         .bearer_auth(&config.api_token)
@@ -458,24 +412,15 @@ async fn claim_command(config: &Config) -> Result<Option<CommandJob>> {
     Ok(body.command)
 }
 
-async fn send_command_result(config: &Config, command_id: &str, ok: bool, result: Option<SqlExecutionResult>, error_message: Option<String>) -> Result<()> {
+async fn send_command_result(config: &Config, command_id: &str, ok: bool, output: Option<String>, error_message: Option<String>) -> Result<()> {
     let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
     let url = format!("{}/api/commands/result", config.api_url.trim_end_matches('/'));
-
-    let output = result.as_ref().map(|r| r.output.clone());
-    let message = result.as_ref().map(|r| r.message.clone());
-    let columns = result.as_ref().map(|r| r.columns.clone()).unwrap_or_default();
-    let rows = result.as_ref().map(|r| r.rows.clone()).unwrap_or_default();
-
     let payload = json!({
         "id": command_id,
         "agentId": config.agent_id,
         "host": hostname(),
         "ok": ok,
-        "message": message,
         "output": output,
-        "columns": columns,
-        "rows": rows,
         "error": error_message,
         "finishedAt": Utc::now().to_rfc3339()
     });
@@ -509,8 +454,8 @@ async fn poll_and_execute_commands(config: &Config) {
 
     info!(command_id = %command.id, "Executando comando remoto aprovado");
     match execute_sqlplus_script(config, &sql) {
-        Ok(result) => {
-            if let Err(err) = send_command_result(config, &command.id, true, Some(result), None).await {
+        Ok(output) => {
+            if let Err(err) = send_command_result(config, &command.id, true, Some(output), None).await {
                 error!(error = %err, command_id = %command.id, "Falha ao enviar resultado do comando");
             }
         }
@@ -529,7 +474,7 @@ async fn collect_once(config: &Config) -> Value {
             "agentId": config.agent_id,
             "customerName": config.customer_name,
             "environment": config.environment,
-            "version": "3.2.2-rust",
+            "version": "3.0.0-rust",
             "host": hostname(),
             "snapshot": {
                 "ok": true,
@@ -543,7 +488,7 @@ async fn collect_once(config: &Config) -> Value {
             "agentId": config.agent_id,
             "customerName": config.customer_name,
             "environment": config.environment,
-            "version": "3.2.2-rust",
+            "version": "3.0.0-rust",
             "host": hostname(),
             "snapshot": {
                 "ok": false,
@@ -558,7 +503,7 @@ async fn collect_once(config: &Config) -> Value {
 
 async fn run_loop() -> Result<()> {
     let config = load_config()?;
-    info!(agent_id = %config.agent_id, version = "3.2.2-rust", "Oracle DBA Agent Rust iniciado");
+    info!(agent_id = %config.agent_id, version = "3.0.0-rust", "Oracle DBA Agent Rust iniciado");
     loop {
         if let Err(err) = send_heartbeat(&config).await {
             error!(error = %err, "Falha ao enviar heartbeat");
