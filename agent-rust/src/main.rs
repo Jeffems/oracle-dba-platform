@@ -190,11 +190,49 @@ exit
     Ok(rows)
 }
 
+fn is_query_sql(sql: &str) -> bool {
+    let mut cleaned = String::new();
+    for line in sql.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("--") || trimmed.is_empty() {
+            continue;
+        }
+        cleaned.push_str(trimmed);
+        cleaned.push(' ');
+    }
+    let lower = cleaned.trim_start().to_lowercase();
+    lower.starts_with("select ") || lower.starts_with("with ")
+}
+
+fn clean_sqlplus_output(output: &str) -> String {
+    output
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty()
+                && !trimmed.eq_ignore_ascii_case("session altered.")
+                && !trimmed.eq_ignore_ascii_case("commit complete.")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
-    let script = format!(
-        "ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,';\nset feedback on echo off verify off pagesize 500 linesize 400 trimspool on serveroutput on\nwhenever sqlerror exit sql.sqlcode\n{}\nexit\n",
-        sql
-    );
+    let is_query = is_query_sql(sql);
+    let script = if is_query {
+        format!(
+            "set echo off verify off feedback off pagesize 500 linesize 400 trimspool on tab off\nALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,';\nwhenever sqlerror exit sql.sqlcode\n{}\nexit\n",
+            sql
+        )
+    } else {
+        format!(
+            "set echo off verify off feedback off heading off pagesize 0 linesize 400 trimspool on serveroutput on\nALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,';\nwhenever sqlerror exit sql.sqlcode\n{}\ncommit;\nexit\n",
+            sql
+        )
+    };
 
     let sql_file = env::temp_dir().join(format!(
         "oracle_dba_agent_script_{}.sql",
@@ -220,10 +258,19 @@ fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
     let combined = format!("{}\n{}", stdout, stderr).trim().to_string();
 
     if combined.contains("ORA-") || combined.contains("SP2-") || !output.status.success() {
-        anyhow::bail!("SQLPlus retornou erro no script remoto: {}", combined);
+        anyhow::bail!("{}", clean_sqlplus_output(&combined));
     }
 
-    Ok(combined)
+    if is_query {
+        let cleaned = clean_sqlplus_output(&stdout);
+        if cleaned.is_empty() {
+            Ok("Consulta executada sem linhas retornadas.".to_string())
+        } else {
+            Ok(cleaned)
+        }
+    } else {
+        Ok("Comando executado com sucesso.".to_string())
+    }
 }
 
 fn hostname() -> String {
