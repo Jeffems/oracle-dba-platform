@@ -1,6 +1,6 @@
 [package]
 name = "oracle-dba-agent"
-version = "3.1.1"
+version = "3.2.1"
 edition = "2021"
 description = "Oracle DBA Enterprise Agent - Windows Service"
 

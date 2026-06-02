@@ -1,4 +1,4 @@
-import { Activity, Cpu, Database, FileArchive, HardDrive, Home, Lock, ScrollText, Settings2, Shield, Users, Wrench, LineChart, ServerCog, ShieldCheck, Cloud } from 'lucide-react';
+import { Activity, Cpu, Database, FileArchive, HardDrive, Home, Lock, ScrollText, Settings2, Shield, Users, Wrench, LineChart, ServerCog, ShieldCheck, Cloud, Globe2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 type Props = { currentPage: string; onPageChange: (page: string) => void; children: ReactNode };
@@ -7,7 +7,8 @@ const items = [
   { id: 'dashboard', label: 'Dashboard', icon: Home },
   { id: 'performance', label: 'Performance Oracle', icon: LineChart },
   { id: 'agent', label: 'Agent Coletor', icon: ServerCog },
-  { id: 'centralApi', label: 'API Central', icon: Cloud },
+  { id: 'centralCloud', label: 'Cloud Dashboard', icon: Globe2 },
+  { id: 'centralApi', label: 'API Central Local', icon: Cloud },
   { id: 'maintenance', label: 'Manutenção Assistida', icon: ShieldCheck },
   { id: 'memory', label: 'Memória', icon: Cpu },
   { id: 'users', label: 'Usuários', icon: Users },

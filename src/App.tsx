@@ -6,6 +6,7 @@ import { PerformanceMonitor } from './pages/PerformanceMonitor';
 import { MaintenanceAssistant } from './pages/MaintenanceAssistant';
 import { AgentService } from './pages/AgentService';
 import { CentralApi } from './pages/CentralApi';
+import { CentralCloudDashboard } from './pages/CentralCloudDashboard';
 import { PatchTemporary } from './pages/PatchTemporary';
 import { SqlWorksheet } from './pages/SqlWorksheet';
 
@@ -17,6 +18,7 @@ export function App() {
       {page === 'dashboard' && <Dashboard />}
       {page === 'performance' && <PerformanceMonitor />}
       {page === 'agent' && <AgentService />}
+      {page === 'centralCloud' && <CentralCloudDashboard />}
       {page === 'centralApi' && <CentralApi />}
       {page === 'maintenance' && <MaintenanceAssistant />}
       {page === 'memory' && <ModulePage moduleKey="memory" />}

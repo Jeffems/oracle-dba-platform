@@ -224,7 +224,7 @@ fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
     let is_query = is_query_sql(sql);
     let script = if is_query {
         format!(
-            "set echo off verify off feedback off pagesize 500 linesize 400 trimspool on tab off\nALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,';\nwhenever sqlerror exit sql.sqlcode\n{}\nexit\n",
+            "set echo off verify off feedback off pagesize 50000 linesize 32767 trimspool on tab off termout on\nset markup csv on delimiter , quote on\nALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,';\nwhenever sqlerror exit sql.sqlcode\n{}\nexit\n",
             sql
         )
     } else {

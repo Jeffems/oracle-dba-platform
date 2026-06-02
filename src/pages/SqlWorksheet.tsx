@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import Editor from '@monaco-editor/react';
-import { executeSingleStatement } from '../services/oracleClient';
+import { executeWithCurrentConnection } from '../services/connectionExecutor';
 import { useConnectionStore } from '../stores/useConnectionStore';
 import { useModuleStateStore } from '../stores/useModuleStateStore';
 import type { QueryResult, ScriptExecutionLog } from '../types/oracle';
@@ -17,7 +17,7 @@ type CurrentStatement = {
 };
 
 export function SqlWorksheet() {
-  const { config } = useConnectionStore();
+  const { mode, config, remote } = useConnectionStore();
   const worksheet = useModuleStateStore((store) => store.worksheet);
   const patchWorksheet = useModuleStateStore((store) => store.patchWorksheet);
 
@@ -77,7 +77,14 @@ export function SqlWorksheet() {
         await new Promise((resolve) => window.requestAnimationFrame(resolve));
 
         const statementStartedAt = Date.now();
-        const response = await executeSingleStatement(config, item.statement);
+        const response = await executeWithCurrentConnection({
+          mode,
+          localConfig: config,
+          remoteConfig: remote.config,
+          agentId: remote.selectedAgentId,
+          sql: item.statement,
+          allowDangerous: true
+        });
         const durationMs = Date.now() - statementStartedAt;
 
         const status: ScriptExecutionLog['status'] = response.ok ? 'success' : 'error';
@@ -118,7 +125,7 @@ export function SqlWorksheet() {
     } catch (error) {
       patchWorksheet({ result: {
         ok: false,
-        message: error instanceof Error ? error.message : 'Bridge Oracle offline. Rode: npm run oracle:bridge',
+        message: error instanceof Error ? error.message : 'Falha na execução. Verifique conexão local/remota',
         logs: localLogs
       }});
     } finally {

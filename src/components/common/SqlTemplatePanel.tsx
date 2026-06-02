@@ -1,6 +1,6 @@
 import { Copy, Download, Play } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
-import { executeSingleStatement } from '../../services/oracleClient';
+import { executeWithCurrentConnection } from '../../services/connectionExecutor';
 import { useConnectionStore } from '../../stores/useConnectionStore';
 import { useModuleStateStore } from '../../stores/useModuleStateStore';
 import type { QueryResult, ScriptExecutionLog } from '../../types/oracle';
@@ -54,7 +54,7 @@ function shortSql(sql?: string) {
 }
 
 export function SqlTemplatePanel({ title, description, fields, defaults, templates }: Props) {
-  const { config } = useConnectionStore();
+  const { mode, config, remote } = useConnectionStore();
   const moduleKey = useMemo(() => title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-'), [title]);
   const defaultTemplateId = templates[0]?.id ?? '';
   const persistedState = useModuleStateStore((store) => store.getTemplateState(moduleKey, defaults, defaultTemplateId));
@@ -150,7 +150,14 @@ export function SqlTemplatePanel({ title, description, fields, defaults, templat
         await new Promise((resolve) => window.requestAnimationFrame(resolve));
 
         const statementStartedAt = Date.now();
-        const response = await executeSingleStatement(config, item.statement);
+        const response = await executeWithCurrentConnection({
+          mode,
+          localConfig: config,
+          remoteConfig: remote.config,
+          agentId: remote.selectedAgentId,
+          sql: item.statement,
+          allowDangerous: true
+        });
         const durationMs = Date.now() - statementStartedAt;
 
         const log: ScriptExecutionLog = {
@@ -191,7 +198,7 @@ export function SqlTemplatePanel({ title, description, fields, defaults, templat
     } catch (error) {
       patchTemplateState(moduleKey, { result: {
         ok: false,
-        message: error instanceof Error ? error.message : 'Bridge Oracle offline. Rode: npm run oracle:bridge',
+        message: error instanceof Error ? error.message : 'Falha na execução. Verifique conexão local/remota',
         logs: localLogs
       }});
     } finally {
