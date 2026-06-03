@@ -7,7 +7,34 @@ import oracledb from "oracledb";
 import type { OracleConnectionConfig } from "../../src/types/oracle";
 
 const PORT = 3789;
-type Payload = { config: OracleConnectionConfig; sql?: string };
+
+type ActiveExecution = {
+  id: string;
+  conn?: any;
+  cancelled: boolean;
+};
+
+const activeExecutions = new Map<string, ActiveExecution>();
+
+async function cancelExecution(executionId: string) {
+  const active = activeExecutions.get(executionId);
+  if (!active) return { ok: false, message: "Execução não encontrada ou já finalizada." };
+
+  active.cancelled = true;
+
+  try {
+    if (active.conn && typeof active.conn.break === "function") {
+      await active.conn.break();
+      return { ok: true, message: "Solicitação de parada enviada ao Oracle." };
+    }
+  } catch (err: any) {
+    return { ok: false, message: err?.message ?? String(err) };
+  }
+
+  return { ok: true, message: "Parada solicitada. A execução será interrompida assim que possível." };
+}
+
+type Payload = { config: OracleConnectionConfig; sql?: string; executionId?: string };
 type ScriptStatement = {
   index: number;
   statement: string;
@@ -104,6 +131,7 @@ async function testConnection(config: OracleConnectionConfig) {
     return { ok: false, message: err?.message ?? String(err) };
   } finally {
     if (conn) await conn.close();
+    
   }
 }
 
@@ -292,8 +320,10 @@ function runSqlPlusAdminCommand(stmt: string, config: OracleConnectionConfig) {
   });
 }
 
-async function executeScript(config: OracleConnectionConfig, sql: string) {
+async function executeScript(config: OracleConnectionConfig, sql: string, executionId?: string) {
   let conn: any;
+  const active = executionId ? { id: executionId, cancelled: false } as ActiveExecution : undefined;
+  if (active) activeExecutions.set(executionId!, active);
   try {
     const statements = splitSqlStatements(sql).filter((item) =>
       item.statement.trim(),
@@ -313,6 +343,9 @@ async function executeScript(config: OracleConnectionConfig, sql: string) {
     const warnings: any[] = [];
     const logs: any[] = [];
     for (let i = 0; i < statements.length; i++) {
+      if (active?.cancelled) {
+        return { ok: false, cancelled: true, message: "Execução cancelada pelo usuário.", executedCount, warningCount: warnings.length, warnings, logs };
+      }
       const item = statements[i];
       const rawStmt = item.statement;
       const startedAt = Date.now();
@@ -359,7 +392,10 @@ async function executeScript(config: OracleConnectionConfig, sql: string) {
           });
           continue;
         }
-        if (!conn) conn = await getConnection(config);
+        if (!conn) {
+          conn = await getConnection(config);
+          if (active) active.conn = conn;
+        }
         const stmt = convertSqlPlusCommand(rawStmt);
         lastResult = await conn.execute(stmt, [], {
           outFormat: oracledb.OUT_FORMAT_OBJECT,
@@ -378,7 +414,11 @@ async function executeScript(config: OracleConnectionConfig, sql: string) {
           rowCount: (lastResult.rows || []).length,
         });
       } catch (err: any) {
-        const message = err?.message ?? String(err);
+        const message = active?.cancelled ? "Execução cancelada pelo usuário." : (err?.message ?? String(err));
+        if (active?.cancelled) {
+          try { if (conn) await conn.rollback(); } catch {}
+          return { ok: false, cancelled: true, message, failedStatement: rawStmt, executedCount, warningCount: warnings.length, warnings, logs };
+        }
         if (isIgnorableOracleError(rawStmt, err)) {
           warnings.push({ statement: rawStmt, message });
           logs.push({
@@ -440,6 +480,7 @@ async function executeScript(config: OracleConnectionConfig, sql: string) {
     return { ok: false, message: err?.message ?? String(err) };
   } finally {
     if (conn) await conn.close();
+    if (executionId) activeExecutions.delete(executionId);
   }
 }
 
@@ -1361,7 +1402,7 @@ const server = http.createServer(async (req, res) => {
       return send(
         res,
         200,
-        await executeScript(payload.config, payload.sql ?? ""),
+        await executeScript(payload.config, payload.sql ?? "", payload.executionId),
       );
     }
     if (req.method === "POST" && req.url === "/execute-script") {
@@ -1369,8 +1410,13 @@ const server = http.createServer(async (req, res) => {
       return send(
         res,
         200,
-        await executeScript(payload.config, payload.sql ?? ""),
+        await executeScript(payload.config, payload.sql ?? "", payload.executionId),
       );
+    }
+    if (req.method === "POST" && req.url === "/execute-script/cancel") {
+      const payload = await readBody(req) as { executionId?: string };
+      if (!payload.executionId) return send(res, 400, { ok: false, message: "executionId não informado." });
+      return send(res, 200, await cancelExecution(payload.executionId));
     }
     if (req.method === "POST" && req.url === "/execute-script-stream") {
       const payload = (await readBody(req)) as Payload;

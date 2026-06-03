@@ -1,6 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import Editor from '@monaco-editor/react';
 import { executeWithCurrentConnection } from '../services/connectionExecutor';
+import { cancelSqlExecution } from '../services/oracleClient';
 import { useConnectionStore } from '../stores/useConnectionStore';
 import { useModuleStateStore } from '../stores/useModuleStateStore';
 import type { QueryResult, ScriptExecutionLog } from '../types/oracle';
@@ -20,6 +21,7 @@ export function SqlWorksheet() {
   const { mode, config, remote } = useConnectionStore();
   const worksheet = useModuleStateStore((store) => store.worksheet);
   const patchWorksheet = useModuleStateStore((store) => store.patchWorksheet);
+  const resetWorksheetRuntime = useModuleStateStore((store) => store.resetWorksheetRuntime);
 
   const sql = worksheet.sql;
   const result = worksheet.result;
@@ -27,6 +29,13 @@ export function SqlWorksheet() {
   const elapsedMs = worksheet.elapsedMs;
   const current = worksheet.current as CurrentStatement | undefined;
   const logs = worksheet.logs;
+  const activeExecutionRef = useRef<{ id: string; controller: AbortController } | null>(null);
+
+  useEffect(() => {
+    // Evita que uma execução antiga fique presa na tela após reload/troca de versão.
+    // A execução em si não sobrevive ao reload do WebView, então o estado busy persistido deve ser limpo.
+    resetWorksheetRuntime();
+  }, [resetWorksheetRuntime]);
 
   useEffect(() => {
     if (!busy) return;
@@ -47,6 +56,10 @@ export function SqlWorksheet() {
     }
 
     const startedAt = Date.now();
+    const executionId = `worksheet-${startedAt}-${Math.random().toString(36).slice(2)}`;
+    const controller = new AbortController();
+    activeExecutionRef.current = { id: executionId, controller };
+
     patchWorksheet({
       busy: true,
       result: undefined,
@@ -83,7 +96,9 @@ export function SqlWorksheet() {
           remoteConfig: remote.config,
           agentId: remote.selectedAgentId,
           sql: item.statement,
-          allowDangerous: true
+          allowDangerous: true,
+          executionId,
+          signal: controller.signal
         });
         const durationMs = Date.now() - statementStartedAt;
 
@@ -123,20 +138,39 @@ export function SqlWorksheet() {
         logs: localLogs
       }});
     } catch (error) {
+      const wasCancelled = useModuleStateStore.getState().worksheet.cancelRequested;
       patchWorksheet({ result: {
         ok: false,
-        message: error instanceof Error ? error.message : 'Falha na execução. Verifique conexão local/remota',
+        message: wasCancelled ? 'Execução cancelada pelo usuário.' : (error instanceof Error ? error.message : 'Falha na execução. Verifique conexão local/remota'),
         logs: localLogs
       }});
     } finally {
       const state = useModuleStateStore.getState().worksheet;
       const finalElapsed = state.startedAt ? Date.now() - state.startedAt : elapsedMs;
       patchWorksheet({ busy: false, elapsedMs: finalElapsed, startedAt: undefined, cancelRequested: false });
+      activeExecutionRef.current = null;
     }
   }
 
-  function stop() {
+  async function stop() {
     patchWorksheet({ cancelRequested: true });
+    const active = activeExecutionRef.current;
+
+    try {
+      if (active) {
+        await cancelSqlExecution(active.id);
+        active.controller.abort();
+      }
+    } finally {
+      activeExecutionRef.current = null;
+      patchWorksheet({
+        busy: false,
+        startedAt: undefined,
+        cancelRequested: false,
+        current: undefined,
+        result: { ok: false, message: 'Execução cancelada pelo usuário.' }
+      });
+    }
   }
 
   return (
@@ -149,7 +183,7 @@ export function SqlWorksheet() {
               onClick={stop}
               className="rounded-xl border border-rose-500/40 px-5 py-2 font-semibold text-rose-200 hover:bg-rose-500/10"
             >
-              Parar após comando atual
+              Parar execução
             </button>
           )}
           <button

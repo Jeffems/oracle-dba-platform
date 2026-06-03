@@ -33,12 +33,13 @@ async function waitForBridge(timeoutMs = 8000): Promise<void> {
   );
 }
 
-async function postJson<T>(path: string, body: unknown): Promise<T> {
+async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   await waitForBridge();
   const response = await fetch(`${BRIDGE_URL}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
 
   if (!response.ok) {
@@ -67,8 +68,8 @@ export async function testConnection(config: OracleConnectionConfig): Promise<Qu
   return postJson<QueryResult>('/test-connection', config);
 }
 
-export async function executeSql(config: OracleConnectionConfig, sql: string): Promise<QueryResult> {
-  return postJson<QueryResult>('/execute-script', { config, sql });
+export async function executeSql(config: OracleConnectionConfig, sql: string, executionId?: string, signal?: AbortSignal): Promise<QueryResult> {
+  return postJson<QueryResult>('/execute-script', { config, sql, executionId }, signal);
 }
 
 export async function executeSqlStream(
@@ -111,8 +112,12 @@ export async function executeSqlStream(
   return finalResult ?? { ok: false, message: 'Execução finalizada sem retorno do bridge.' };
 }
 
-export async function executeSingleStatement(config: OracleConnectionConfig, sql: string): Promise<QueryResult> {
-  return postJson<QueryResult>('/execute-script', { config, sql });
+export async function executeSingleStatement(config: OracleConnectionConfig, sql: string, executionId?: string, signal?: AbortSignal): Promise<QueryResult> {
+  return postJson<QueryResult>('/execute-script', { config, sql, executionId }, signal);
+}
+
+export async function cancelSqlExecution(executionId: string): Promise<{ ok: boolean; message: string }> {
+  return postJson<{ ok: boolean; message: string }>('/execute-script/cancel', { executionId });
 }
 
 export async function runPatchStream(

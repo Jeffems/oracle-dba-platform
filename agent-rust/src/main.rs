@@ -168,8 +168,34 @@ fn strip_sqlplus_noise(text: &str) -> String {
         .to_string()
 }
 
+
+/// Garante que o comando enviado ao SQLPlus tenha terminador.
+/// O desktop separa o script por `;` e envia cada comando sem o ponto-e-vírgula.
+/// O driver node-oracledb aceita isso, mas o SQLPlus precisa de `;` ou `/`;
+/// sem terminador ele pode sair sem executar e retornar STDOUT/STDERR vazios.
+fn sqlplus_ready_sql(sql: &str) -> String {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let last_line = trimmed
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+
+    if trimmed.ends_with(';') || last_line == "/" {
+        trimmed.to_string()
+    } else {
+        format!("{};", trimmed)
+    }
+}
+
 fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
     let is_query = is_query_sql(sql);
+    let sql_for_sqlplus = sqlplus_ready_sql(sql);
 
     // Envia o script via stdin em vez de arquivo @script.sql.
     // Isso elimina qualquer problema com caminhos de spool no Windows
@@ -187,7 +213,7 @@ fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
              whenever sqlerror exit sql.sqlcode\n\
              {sql}\n\
              exit\n",
-            sql = sql,
+            sql = sql_for_sqlplus,
         )
     } else {
         format!(
@@ -197,7 +223,7 @@ fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
              {sql}\n\
              commit;\n\
              exit\n",
-            sql = sql,
+            sql = sql_for_sqlplus,
         )
     };
 
@@ -401,7 +427,7 @@ async fn send_heartbeat(config: &Config) -> Result<()> {
         "agentId":      config.agent_id,
         "customerName": config.customer_name,
         "environment":  config.environment,
-        "version":      "3.2.3-rust",
+        "version":      "3.2.4-rust",
         "host":         hostname(),
         "lastSeenAt":   Utc::now().to_rfc3339()
     });
@@ -438,7 +464,7 @@ async fn claim_command(config: &Config) -> Result<Option<CommandJob>> {
     let payload = json!({
         "agentId": config.agent_id,
         "host":    hostname(),
-        "version": "3.2.3-rust"
+        "version": "3.2.4-rust"
     });
     let res = client
         .post(&url)
@@ -584,7 +610,7 @@ async fn run_metrics_loop(config: Arc<Config>) {
                     "agentId":      cfg_clone.agent_id,
                     "customerName": cfg_clone.customer_name,
                     "environment":  cfg_clone.environment,
-                    "version":      "3.2.3-rust",
+                    "version":      "3.2.4-rust",
                     "host":         hostname(),
                     "snapshot": {
                         "ok":          true,
@@ -598,7 +624,7 @@ async fn run_metrics_loop(config: Arc<Config>) {
                     "agentId":      cfg_clone.agent_id,
                     "customerName": cfg_clone.customer_name,
                     "environment":  cfg_clone.environment,
-                    "version":      "3.2.3-rust",
+                    "version":      "3.2.4-rust",
                     "host":         hostname(),
                     "snapshot": {
                         "ok":          false,
@@ -630,7 +656,7 @@ async fn run_metrics_loop(config: Arc<Config>) {
 
 async fn run_loop() -> Result<()> {
     let config = Arc::new(load_config()?);
-    info!(agent_id = %config.agent_id, version = "3.2.3-rust", "Oracle DBA Agent Rust iniciado");
+    info!(agent_id = %config.agent_id, version = "3.2.4-rust", "Oracle DBA Agent Rust iniciado");
 
     // Dois loops independentes em paralelo:
     //  - comandos: polling a cada 3s

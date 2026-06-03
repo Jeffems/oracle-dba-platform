@@ -13,6 +13,23 @@ const node_os_1 = __importDefault(require("node:os"));
 const node_path_1 = __importDefault(require("node:path"));
 const oracledb_1 = __importDefault(require("oracledb"));
 const PORT = 3789;
+const activeExecutions = new Map();
+async function cancelExecution(executionId) {
+    const active = activeExecutions.get(executionId);
+    if (!active)
+        return { ok: false, message: "Execução não encontrada ou já finalizada." };
+    active.cancelled = true;
+    try {
+        if (active.conn && typeof active.conn.break === "function") {
+            await active.conn.break();
+            return { ok: true, message: "Solicitação de parada enviada ao Oracle." };
+        }
+    }
+    catch (err) {
+        return { ok: false, message: err?.message ?? String(err) };
+    }
+    return { ok: true, message: "Parada solicitada. A execução será interrompida assim que possível." };
+}
 function readBody(req) {
     return new Promise((resolve, reject) => {
         let body = "";
@@ -233,8 +250,11 @@ function runSqlPlusAdminCommand(stmt, config) {
         sqlplus.stdin.end();
     });
 }
-async function executeScript(config, sql) {
+async function executeScript(config, sql, executionId) {
     let conn;
+    const active = executionId ? { id: executionId, cancelled: false } : undefined;
+    if (active)
+        activeExecutions.set(executionId, active);
     try {
         const statements = splitSqlStatements(sql).filter((item) => item.statement.trim());
         if (!statements.length)
@@ -251,6 +271,9 @@ async function executeScript(config, sql) {
         const warnings = [];
         const logs = [];
         for (let i = 0; i < statements.length; i++) {
+            if (active?.cancelled) {
+                return { ok: false, cancelled: true, message: "Execução cancelada pelo usuário.", executedCount, warningCount: warnings.length, warnings, logs };
+            }
             const item = statements[i];
             const rawStmt = item.statement;
             const startedAt = Date.now();
@@ -298,8 +321,11 @@ async function executeScript(config, sql) {
                     });
                     continue;
                 }
-                if (!conn)
+                if (!conn) {
                     conn = await getConnection(config);
+                    if (active)
+                        active.conn = conn;
+                }
                 const stmt = convertSqlPlusCommand(rawStmt);
                 lastResult = await conn.execute(stmt, [], {
                     outFormat: oracledb_1.default.OUT_FORMAT_OBJECT,
@@ -319,7 +345,15 @@ async function executeScript(config, sql) {
                 });
             }
             catch (err) {
-                const message = err?.message ?? String(err);
+                const message = active?.cancelled ? "Execução cancelada pelo usuário." : (err?.message ?? String(err));
+                if (active?.cancelled) {
+                    try {
+                        if (conn)
+                            await conn.rollback();
+                    }
+                    catch { }
+                    return { ok: false, cancelled: true, message, failedStatement: rawStmt, executedCount, warningCount: warnings.length, warnings, logs };
+                }
                 if (isIgnorableOracleError(rawStmt, err)) {
                     warnings.push({ statement: rawStmt, message });
                     logs.push({
@@ -388,6 +422,8 @@ async function executeScript(config, sql) {
     finally {
         if (conn)
             await conn.close();
+        if (executionId)
+            activeExecutions.delete(executionId);
     }
 }
 function sendStreamEvent(res, event) {
@@ -1242,11 +1278,17 @@ const server = node_http_1.default.createServer(async (req, res) => {
             return send(res, 200, await testConnection(await readBody(req)));
         if (req.method === "POST" && req.url === "/execute") {
             const payload = (await readBody(req));
-            return send(res, 200, await executeScript(payload.config, payload.sql ?? ""));
+            return send(res, 200, await executeScript(payload.config, payload.sql ?? "", payload.executionId));
         }
         if (req.method === "POST" && req.url === "/execute-script") {
             const payload = (await readBody(req));
-            return send(res, 200, await executeScript(payload.config, payload.sql ?? ""));
+            return send(res, 200, await executeScript(payload.config, payload.sql ?? "", payload.executionId));
+        }
+        if (req.method === "POST" && req.url === "/execute-script/cancel") {
+            const payload = await readBody(req);
+            if (!payload.executionId)
+                return send(res, 400, { ok: false, message: "executionId não informado." });
+            return send(res, 200, await cancelExecution(payload.executionId));
         }
         if (req.method === "POST" && req.url === "/execute-script-stream") {
             const payload = (await readBody(req));

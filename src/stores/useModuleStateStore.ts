@@ -41,6 +41,7 @@ type ModuleStateStore = {
   patchTemplateValues: (moduleKey: string, values: Record<string, string>) => void;
   patchWorksheet: (patch: Partial<WorksheetState>) => void;
   resetRuntime: (moduleKey: string) => void;
+  resetWorksheetRuntime: () => void;
 };
 
 const defaultWorksheet: WorksheetState = {
@@ -128,6 +129,20 @@ export const useModuleStateStore = create<ModuleStateStore>()(
           },
         })),
 
+      resetWorksheetRuntime: () =>
+        set((state) => ({
+          worksheet: {
+            ...state.worksheet,
+            busy: false,
+            elapsedMs: 0,
+            current: undefined,
+            logs: [],
+            result: state.worksheet.result,
+            startedAt: undefined,
+            cancelRequested: false,
+          },
+        })),
+
       resetRuntime: (moduleKey) =>
         set((state) => {
           const current = state.templates[moduleKey];
@@ -152,8 +167,29 @@ export const useModuleStateStore = create<ModuleStateStore>()(
     {
       name: 'oracle-dba-module-state',
       partialize: (state) => ({
-        templates: state.templates,
-        worksheet: state.worksheet,
+        templates: Object.fromEntries(
+          Object.entries(state.templates).map(([key, value]) => [
+            key,
+            {
+              ...value,
+              busy: false,
+              elapsedMs: 0,
+              current: undefined,
+              logs: [],
+              startedAt: undefined,
+              cancelRequested: false,
+            },
+          ])
+        ),
+        worksheet: {
+          ...state.worksheet,
+          busy: false,
+          elapsedMs: 0,
+          current: undefined,
+          logs: [],
+          startedAt: undefined,
+          cancelRequested: false,
+        },
       }),
     }
   )

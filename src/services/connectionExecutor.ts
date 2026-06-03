@@ -15,6 +15,8 @@ export type UnifiedExecutionInput = {
   sql: string;
   allowDangerous?: boolean;
   timeoutMs?: number;
+  executionId?: string;
+  signal?: AbortSignal;
 };
 
 // ---------------------------------------------------------------------------
@@ -184,7 +186,7 @@ export async function executeWithCurrentConnection(
 ): Promise<QueryResult> {
   // --- Modo local ---
   if (input.mode === 'local') {
-    return executeSingleStatement(input.localConfig, input.sql);
+    return executeSingleStatement(input.localConfig, input.sql, input.executionId, input.signal);
   }
 
   // --- Modo remoto via Agent ---
@@ -202,7 +204,7 @@ export async function executeWithCurrentConnection(
       agentId: input.agentId,
       sql: input.sql,
       allowDangerous: Boolean(input.allowDangerous),
-      note: 'Criado pelo App Desktop v3.2.3',
+      note: 'Criado pelo App Desktop v3.2.4',
     });
   } catch (err) {
     return {
