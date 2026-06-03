@@ -20,6 +20,7 @@ const items = [
   { id: 'erp', label: 'ERP Presets', icon: Shield },
   { id: 'patch', label: 'Patch Temporário', icon: Wrench },
   { id: 'sql', label: 'SQL Worksheet', icon: ScrollText },
+  { id: 'remoteDiag', label: '🔬 Diagnóstico Remoto', icon: Activity },
 ];
 
 export function AppLayout({ currentPage, onPageChange, children }: Props) {

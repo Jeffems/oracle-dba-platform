@@ -9,6 +9,7 @@ import { CentralApi } from './pages/CentralApi';
 import { CentralCloudDashboard } from './pages/CentralCloudDashboard';
 import { PatchTemporary } from './pages/PatchTemporary';
 import { SqlWorksheet } from './pages/SqlWorksheet';
+import { RemoteDiag } from './pages/RemoteDiag';
 
 export function App() {
   const [page, setPage] = useState('dashboard');
@@ -31,6 +32,7 @@ export function App() {
       {page === 'erp' && <ModulePage moduleKey="erp" />}
       {page === 'patch' && <PatchTemporary />}
       {page === 'sql' && <SqlWorksheet />}
+      {page === 'remoteDiag' && <RemoteDiag />}
     </AppLayout>
   );
 }

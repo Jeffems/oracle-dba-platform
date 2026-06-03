@@ -2,9 +2,13 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{env, fs, path::PathBuf, process::Command, time::Duration};
+use std::{env, fs, path::PathBuf, process::Command, sync::Arc, time::Duration};
 use tokio::time::sleep;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
 struct OracleConfig {
@@ -36,6 +40,10 @@ struct Config {
     log_dir: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Structs de API
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Serialize)]
 struct OverviewRow {
     #[serde(rename = "METRIC")]
@@ -45,7 +53,6 @@ struct OverviewRow {
     #[serde(rename = "LABEL")]
     label: String,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 struct CommandJob {
@@ -66,6 +73,10 @@ struct ClaimResponse {
     command: Option<CommandJob>,
 }
 
+// ---------------------------------------------------------------------------
+// Helpers de ambiente
+// ---------------------------------------------------------------------------
+
 fn exe_dir() -> PathBuf {
     env::current_exe()
         .ok()
@@ -79,12 +90,15 @@ fn arg_value(name: &str) -> Option<String> {
 }
 
 fn config_path() -> PathBuf {
-    arg_value("--config").map(PathBuf::from).unwrap_or_else(|| exe_dir().join("config.json"))
+    arg_value("--config")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| exe_dir().join("config.json"))
 }
 
 fn load_config() -> Result<Config> {
     let path = config_path();
-    let raw = fs::read_to_string(&path).with_context(|| format!("Não foi possível ler config: {}", path.display()))?;
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("Não foi possível ler config: {}", path.display()))?;
     serde_json::from_str(&raw).context("config.json inválido")
 }
 
@@ -105,10 +119,136 @@ fn init_logs(config: Option<&Config>) {
     let _ = tracing::subscriber::set_global_default(subscriber);
 }
 
+fn hostname() -> String {
+    env::var("COMPUTERNAME")
+        .or_else(|_| env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "unknown-host".to_string())
+}
+
 fn sqlplus_connect_string(oracle: &OracleConfig) -> String {
     let base = format!("{}/{}@{}", oracle.user, oracle.password, oracle.connect_string);
-    if oracle.as_sysdba { format!("{} as sysdba", base) } else { base }
+    if oracle.as_sysdba {
+        format!("{} as sysdba", base)
+    } else {
+        base
+    }
 }
+
+// ---------------------------------------------------------------------------
+// SQLPlus — execução de scripts/consultas remotos
+// ---------------------------------------------------------------------------
+
+fn is_query_sql(sql: &str) -> bool {
+    let mut cleaned = String::new();
+    for line in sql.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("--") || trimmed.is_empty() {
+            continue;
+        }
+        cleaned.push_str(trimmed);
+        cleaned.push(' ');
+    }
+    let lower = cleaned.trim_start().to_lowercase();
+    lower.starts_with("select ") || lower.starts_with("with ")
+}
+
+/// Filtra ruídos do SQLPlus apenas para uso em mensagens de erro.
+/// NUNCA usar no conteúdo CSV — destrói os dados.
+fn strip_sqlplus_noise(text: &str) -> String {
+    text.lines()
+        .filter(|line| {
+            let t = line.trim();
+            !t.is_empty()
+                && !t.eq_ignore_ascii_case("session altered.")
+                && !t.eq_ignore_ascii_case("commit complete.")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
+    let is_query = is_query_sql(sql);
+
+    // Envia o script via stdin em vez de arquivo @script.sql.
+    // Isso elimina qualquer problema com caminhos de spool no Windows
+    // (espaços, barras, TEMP com caracteres especiais, permissões).
+    //
+    // Para queries: usa markup csv on — o SQLPlus escreve o CSV no stdout.
+    //   termout ON (padrão) + sem spool = tudo vai para stdout capturado pelo pipe.
+    //
+    // Para DDL/DML: serveroutput on, resultado também no stdout.
+    let script = if is_query {
+        format!(
+            "set echo off verify off feedback off tab off\n\
+             set pagesize 50000 linesize 32767 trimspool on\n\
+             set markup csv on delimiter , quote on\n\
+             whenever sqlerror exit sql.sqlcode\n\
+             {sql}\n\
+             exit\n",
+            sql = sql,
+        )
+    } else {
+        format!(
+            "set echo off verify off feedback off heading off\n\
+             set pagesize 0 linesize 400 trimspool on serveroutput on\n\
+             whenever sqlerror exit sql.sqlcode\n\
+             {sql}\n\
+             commit;\n\
+             exit\n",
+            sql = sql,
+        )
+    };
+
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(&config.oracle.sqlplus_path)
+        .arg("-S")
+        .arg(sqlplus_connect_string(&config.oracle))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| "Falha ao iniciar sqlplus. Verifique Oracle Client/SQLPlus no PATH")?;
+
+    // Escreve o script no stdin e fecha para o SQLPlus saber que terminou
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(script.as_bytes())
+            .context("Falha ao escrever script no stdin do sqlplus")?;
+        // drop explícito fecha o pipe — SQLPlus recebe EOF e executa
+    }
+
+    let proc = child.wait_with_output()
+        .context("Falha ao aguardar sqlplus finalizar")?;
+
+    let stdout = String::from_utf8_lossy(&proc.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&proc.stderr).to_string();
+    let all_output = format!("{}\n{}", stdout, stderr);
+
+    // Detecta erros Oracle
+    if all_output.contains("ORA-") || all_output.contains("SP2-") || !proc.status.success() {
+        let msg = strip_sqlplus_noise(&all_output);
+        anyhow::bail!("{}", msg);
+    }
+
+    if is_query {
+        // stdout contém o CSV diretamente — sem depender de arquivo de spool
+        let result = stdout.trim().to_string();
+        if result.is_empty() {
+            Ok("__EMPTY_RESULT__".to_string())
+        } else {
+            Ok(result)
+        }
+    } else {
+        Ok("Comando executado com sucesso.".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQLPlus — coleta de métricas
+// ---------------------------------------------------------------------------
 
 fn run_sqlplus_metrics(config: &Config) -> Result<Vec<OverviewRow>> {
     let script = r#"
@@ -133,12 +273,12 @@ exit
 "#;
 
     let sql_file = env::temp_dir().join(format!(
-        "oracle_dba_agent_metrics_{}.sql",
+        "odba_metrics_{}.sql",
         Utc::now().timestamp_millis()
     ));
 
     fs::write(&sql_file, script)
-        .with_context(|| format!("Falha ao criar arquivo SQL temporário: {}", sql_file.display()))?;
+        .with_context(|| format!("Falha ao criar arquivo SQL de métricas: {}", sql_file.display()))?;
 
     let output = Command::new(&config.oracle.sqlplus_path)
         .arg("-S")
@@ -147,7 +287,7 @@ exit
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
-        .context("Falha ao executar sqlplus. Verifique Oracle Client/SQLPlus no PATH")?;
+        .context("Falha ao executar sqlplus para métricas")?;
 
     let _ = fs::remove_file(&sql_file);
 
@@ -156,166 +296,43 @@ exit
     let combined = format!("{}\n{}", stdout, stderr);
 
     if combined.contains("ORA-") || combined.contains("SP2-") || !output.status.success() {
-        anyhow::bail!("SQLPlus retornou erro: {}", combined.trim());
+        anyhow::bail!("SQLPlus retornou erro nas métricas: {}", combined.trim());
     }
 
     let mut rows = Vec::new();
     for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
         if let Some((key, value)) = line.split_once('=') {
             let label = match key {
-                "ACTIVE_SESSIONS" => "Sessões ativas",
-                "BLOCKED_SESSIONS" => "Sessões bloqueadas",
-                "LOCKS_WAITING" => "Locks em espera",
-                "INVALID_OBJECTS" => "Objetos inválidos",
-                "TABLESPACE_MAX_USED_PCT" => "Maior uso de tablespace (%)",
-                "LONG_OPS" => "Operações longas ativas",
-                "DB_CPU_SECONDS" => "DB CPU acumulado (s)",
-                "DB_TIME_SECONDS" => "DB Time acumulado (s)",
-                "LOGICAL_READS" => "Leituras lógicas acumuladas",
-                "PHYSICAL_READS" => "Leituras físicas acumuladas",
-                "EXECUTIONS" => "Execuções acumuladas",
-                "PARSE_COUNT_TOTAL" => "Parses acumulados",
-                "REDO_SIZE_MB" => "Redo gerado acumulado (MB)",
-                "PGA_ALLOC_MB" => "PGA alocada (MB)",
-                "SGA_MB" => "SGA total (MB)",
-                _ => key,
+                "ACTIVE_SESSIONS"        => "Sessões ativas",
+                "BLOCKED_SESSIONS"       => "Sessões bloqueadas",
+                "LOCKS_WAITING"          => "Locks em espera",
+                "INVALID_OBJECTS"        => "Objetos inválidos",
+                "TABLESPACE_MAX_USED_PCT"=> "Maior uso de tablespace (%)",
+                "LONG_OPS"               => "Operações longas ativas",
+                "DB_CPU_SECONDS"         => "DB CPU acumulado (s)",
+                "DB_TIME_SECONDS"        => "DB Time acumulado (s)",
+                "LOGICAL_READS"          => "Leituras lógicas acumuladas",
+                "PHYSICAL_READS"         => "Leituras físicas acumuladas",
+                "EXECUTIONS"             => "Execuções acumuladas",
+                "PARSE_COUNT_TOTAL"      => "Parses acumulados",
+                "REDO_SIZE_MB"           => "Redo gerado acumulado (MB)",
+                "PGA_ALLOC_MB"           => "PGA alocada (MB)",
+                "SGA_MB"                 => "SGA total (MB)",
+                _                        => key,
             };
             rows.push(OverviewRow {
                 metric: key.to_string(),
-                value: value.trim().replace(',', ".").parse::<f64>().unwrap_or(0.0),
-                label: label.to_string(),
+                value:  value.trim().replace(',', ".").parse::<f64>().unwrap_or(0.0),
+                label:  label.to_string(),
             });
         }
     }
     Ok(rows)
 }
 
-fn is_query_sql(sql: &str) -> bool {
-    let mut cleaned = String::new();
-    for line in sql.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("--") || trimmed.is_empty() {
-            continue;
-        }
-        cleaned.push_str(trimmed);
-        cleaned.push(' ');
-    }
-    let lower = cleaned.trim_start().to_lowercase();
-    lower.starts_with("select ") || lower.starts_with("with ")
-}
-
-/// Remove linhas de ruído do SQLPlus (session altered, commit complete, linhas vazias).
-/// Usado apenas para mensagens de erro — nunca aplicar sobre CSV de resultado.
-fn clean_sqlplus_noise(output: &str) -> String {
-    output
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| {
-            let trimmed = line.trim();
-            !trimmed.is_empty()
-                && !trimmed.eq_ignore_ascii_case("session altered.")
-                && !trimmed.eq_ignore_ascii_case("commit complete.")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
-}
-
-/// Retorna true se o texto de saída do SQLPlus tem alguma linha de erro Oracle.
-fn has_oracle_error(text: &str) -> bool {
-    text.contains("ORA-") || text.contains("SP2-")
-}
-
-fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
-    let is_query = is_query_sql(sql);
-    let timestamp = Utc::now().timestamp_millis();
-    let sql_file = env::temp_dir().join(format!("oracle_dba_agent_script_{}.sql", timestamp));
-    let result_file = env::temp_dir().join(format!("oracle_dba_agent_result_{}.csv", timestamp));
-
-    // SQLPlus no Windows exige barras normais no caminho do spool
-    let result_file_for_sqlplus = result_file.display().to_string().replace('\\', "/");
-
-    let script = if is_query {
-        // Para SELECTs: markup csv gera cabeçalho + linhas entre aspas.
-        // termout off impede que o SQLPlus duplique o output no stdout — o resultado
-        // fica SOMENTE no arquivo de spool.
-        format!(
-            r#"set echo off verify off feedback off pagesize 50000 linesize 32767 trimspool on tab off termout off
-set markup csv on delimiter , quote on
-whenever sqlerror exit sql.sqlcode
-spool "{}"
-{}
-spool off
-exit
-"#,
-            result_file_for_sqlplus,
-            sql
-        )
-    } else {
-        // Para DDL/DML: capturamos serveroutput e o resultado do commit no spool.
-        format!(
-            r#"set echo off verify off feedback off heading off pagesize 0 linesize 400 trimspool on serveroutput on termout off
-whenever sqlerror exit sql.sqlcode
-spool "{}"
-{}
-commit;
-spool off
-exit
-"#,
-            result_file_for_sqlplus,
-            sql
-        )
-    };
-
-    fs::write(&sql_file, &script)
-        .with_context(|| format!("Falha ao criar script SQL temporário: {}", sql_file.display()))?;
-
-    let output = Command::new(&config.oracle.sqlplus_path)
-        .arg("-S")
-        .arg(sqlplus_connect_string(&config.oracle))
-        .arg(format!("@{}", sql_file.display()))
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .context("Falha ao executar sqlplus para script remoto. Verifique Oracle Client/SQLPlus no PATH")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    // Lê o arquivo de spool ANTES de remover — é aqui que está o resultado real
-    let spooled = fs::read_to_string(&result_file).unwrap_or_default();
-
-    let _ = fs::remove_file(&sql_file);
-    let _ = fs::remove_file(&result_file);
-
-    // Para detectar erros combinamos stdout + stderr + spool.
-    // Usamos clean_sqlplus_noise só para a mensagem de erro — nunca no CSV.
-    let combined_for_error = format!("{}\n{}\n{}", stdout, stderr, spooled);
-    if has_oracle_error(&combined_for_error) || !output.status.success() {
-        let error_msg = clean_sqlplus_noise(&combined_for_error);
-        anyhow::bail!("{}", error_msg);
-    }
-
-    if is_query {
-        // O CSV vem do spool; preservamos exatamente como o SQLPlus gravou,
-        // apenas removendo linhas completamente vazias no início/fim.
-        let csv = spooled.trim().to_string();
-        if csv.is_empty() {
-            Ok("Consulta executada sem linhas retornadas.".to_string())
-        } else {
-            Ok(csv)
-        }
-    } else {
-        Ok("Comando executado com sucesso.".to_string())
-    }
-}
-
-fn hostname() -> String {
-    env::var("COMPUTERNAME")
-        .or_else(|_| env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "unknown-host".to_string())
-}
+// ---------------------------------------------------------------------------
+// Fila offline de métricas
+// ---------------------------------------------------------------------------
 
 fn queue_dir(config: &Config) -> PathBuf {
     let base = config
@@ -337,35 +354,59 @@ fn persist_offline_metric(config: &Config, snapshot: &Value) -> Result<()> {
 
 async fn flush_offline_queue(config: &Config) {
     let dir = queue_dir(config);
-    let Ok(entries) = fs::read_dir(&dir) else { return; };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") { continue; }
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
         match fs::read_to_string(&path)
             .ok()
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok()) {
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        {
             Some(snapshot) => match send_metrics(config, snapshot).await {
-                Ok(_) => { let _ = fs::remove_file(&path); info!(file = %path.display(), "Métrica offline reenviada"); }
-                Err(err) => { error!(error = %err, file = %path.display(), "Falha ao reenviar fila offline"); break; }
+                Ok(_) => {
+                    let _ = fs::remove_file(&path);
+                    info!(file = %path.display(), "Métrica offline reenviada");
+                }
+                Err(err) => {
+                    error!(error = %err, file = %path.display(), "Falha ao reenviar fila offline");
+                    break;
+                }
             },
-            None => { let _ = fs::remove_file(&path); }
+            None => {
+                let _ = fs::remove_file(&path);
+            }
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// HTTP — API Central
+// ---------------------------------------------------------------------------
+
+fn http_client(timeout_secs: u64) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+        .context("Falha ao criar HTTP client")
+}
+
 async fn send_heartbeat(config: &Config) -> Result<()> {
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(10)).build()?;
+    let client = http_client(10)?;
     let url = format!("{}/api/heartbeat", config.api_url.trim_end_matches('/'));
     let payload = json!({
-        "agentId": config.agent_id,
+        "agentId":      config.agent_id,
         "customerName": config.customer_name,
-        "environment": config.environment,
-        "version": "3.0.0-rust",
-        "host": hostname(),
-        "lastSeenAt": Utc::now().to_rfc3339()
+        "environment":  config.environment,
+        "version":      "3.2.3-rust",
+        "host":         hostname(),
+        "lastSeenAt":   Utc::now().to_rfc3339()
     });
     let res = client
-        .post(url)
+        .post(&url)
         .bearer_auth(&config.api_token)
         .json(&payload)
         .send()
@@ -377,10 +418,10 @@ async fn send_heartbeat(config: &Config) -> Result<()> {
 }
 
 async fn send_metrics(config: &Config, snapshot: Value) -> Result<()> {
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let client = http_client(20)?;
     let url = format!("{}/api/metrics", config.api_url.trim_end_matches('/'));
     let res = client
-        .post(url)
+        .post(&url)
         .bearer_auth(&config.api_token)
         .json(&snapshot)
         .send()
@@ -391,19 +432,26 @@ async fn send_metrics(config: &Config, snapshot: Value) -> Result<()> {
     Ok(())
 }
 
-
 async fn claim_command(config: &Config) -> Result<Option<CommandJob>> {
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
+    let client = http_client(15)?;
     let url = format!("{}/api/commands/claim", config.api_url.trim_end_matches('/'));
-    let payload = json!({ "agentId": config.agent_id, "host": hostname(), "version": "3.0.0-rust" });
+    let payload = json!({
+        "agentId": config.agent_id,
+        "host":    hostname(),
+        "version": "3.2.3-rust"
+    });
     let res = client
-        .post(url)
+        .post(&url)
         .bearer_auth(&config.api_token)
         .json(&payload)
         .send()
         .await?;
     if !res.status().is_success() {
-        anyhow::bail!("Claim command respondeu HTTP {}: {}", res.status(), res.text().await.unwrap_or_default());
+        anyhow::bail!(
+            "Claim command respondeu HTTP {}: {}",
+            res.status(),
+            res.text().await.unwrap_or_default()
+        );
     }
     let body: ClaimResponse = res.json().await?;
     if !body.ok {
@@ -412,104 +460,159 @@ async fn claim_command(config: &Config) -> Result<Option<CommandJob>> {
     Ok(body.command)
 }
 
-async fn send_command_result(config: &Config, command_id: &str, ok: bool, output: Option<String>, error_message: Option<String>) -> Result<()> {
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+async fn send_command_result(
+    config: &Config,
+    command_id: &str,
+    ok: bool,
+    output: Option<String>,
+    error_message: Option<String>,
+) -> Result<()> {
+    let client = http_client(20)?;
     let url = format!("{}/api/commands/result", config.api_url.trim_end_matches('/'));
     let payload = json!({
-        "id": command_id,
-        "agentId": config.agent_id,
-        "host": hostname(),
-        "ok": ok,
-        "output": output,
-        "error": error_message,
+        "id":         command_id,
+        "agentId":    config.agent_id,
+        "host":       hostname(),
+        "ok":         ok,
+        "output":     output,
+        "error":      error_message,
         "finishedAt": Utc::now().to_rfc3339()
     });
     let res = client
-        .post(url)
+        .post(&url)
         .bearer_auth(&config.api_token)
         .json(&payload)
         .send()
         .await?;
     if !res.status().is_success() {
-        anyhow::bail!("Resultado do comando respondeu HTTP {}: {}", res.status(), res.text().await.unwrap_or_default());
+        anyhow::bail!(
+            "Resultado do comando respondeu HTTP {}: {}",
+            res.status(),
+            res.text().await.unwrap_or_default()
+        );
     }
     Ok(())
 }
 
-async fn poll_and_execute_commands(config: &Config) {
-    let command = match claim_command(config).await {
-        Ok(command) => command,
-        Err(err) => {
-            error!(error = %err, "Falha ao consultar comandos pendentes");
-            return;
-        }
-    };
+// ---------------------------------------------------------------------------
+// Loop de comandos — separado e independente do loop de métricas
+// Loop de métricas roda a cada interval_seconds (mín. 10s)
+// Loop de comandos roda a cada 3s para resposta rápida
+// ---------------------------------------------------------------------------
 
-    let Some(command) = command else { return; };
-    let sql = command.sql.clone().unwrap_or_default();
-    if sql.trim().is_empty() {
-        let _ = send_command_result(config, &command.id, false, None, Some("Comando sem SQL/script.".to_string())).await;
-        return;
-    }
-
-    info!(command_id = %command.id, "Executando comando remoto aprovado");
-    match execute_sqlplus_script(config, &sql) {
-        Ok(output) => {
-            if let Err(err) = send_command_result(config, &command.id, true, Some(output), None).await {
-                error!(error = %err, command_id = %command.id, "Falha ao enviar resultado do comando");
-            }
-        }
-        Err(err) => {
-            let error_message = err.to_string();
-            error!(error = %error_message, command_id = %command.id, "Comando remoto falhou");
-            let _ = send_command_result(config, &command.id, false, None, Some(error_message)).await;
-        }
-    }
-}
-
-async fn collect_once(config: &Config) -> Value {
-    let collected_at = Utc::now().to_rfc3339();
-    match run_sqlplus_metrics(config) {
-        Ok(overview) => json!({
-            "agentId": config.agent_id,
-            "customerName": config.customer_name,
-            "environment": config.environment,
-            "version": "3.0.0-rust",
-            "host": hostname(),
-            "snapshot": {
-                "ok": true,
-                "collectedAt": collected_at,
-                "host": hostname(),
-                "overview": overview,
-                "collector": "rust-sqlplus"
-            }
-        }),
-        Err(err) => json!({
-            "agentId": config.agent_id,
-            "customerName": config.customer_name,
-            "environment": config.environment,
-            "version": "3.0.0-rust",
-            "host": hostname(),
-            "snapshot": {
-                "ok": false,
-                "collectedAt": collected_at,
-                "host": hostname(),
-                "message": err.to_string(),
-                "collector": "rust-sqlplus"
-            }
-        })
-    }
-}
-
-async fn run_loop() -> Result<()> {
-    let config = load_config()?;
-    info!(agent_id = %config.agent_id, version = "3.0.0-rust", "Oracle DBA Agent Rust iniciado");
+async fn run_command_loop(config: Arc<Config>) {
+    info!("Loop de comandos iniciado (polling a cada 3s)");
     loop {
+        match claim_command(&config).await {
+            Err(err) => {
+                error!(error = %err, "Falha ao consultar comandos pendentes");
+            }
+            Ok(None) => {
+                // Sem comandos pendentes — aguarda e tenta novamente
+            }
+            Ok(Some(command)) => {
+                let sql = command.sql.clone().unwrap_or_default();
+                if sql.trim().is_empty() {
+                    let _ = send_command_result(
+                        &config,
+                        &command.id,
+                        false,
+                        None,
+                        Some("Comando sem SQL/script.".to_string()),
+                    )
+                    .await;
+                } else {
+                    info!(command_id = %command.id, "Executando comando remoto");
+                    // executa_sqlplus_script é bloqueante — usa spawn_blocking para não
+                    // travar o runtime Tokio durante a execução do SQLPlus
+                    let cfg_clone = Arc::clone(&config);
+                    let sql_clone = sql.clone();
+                    let exec_result =
+                        tokio::task::spawn_blocking(move || execute_sqlplus_script(&cfg_clone, &sql_clone))
+                            .await;
+
+                    match exec_result {
+                        Err(join_err) => {
+                            error!(error = %join_err, command_id = %command.id, "spawn_blocking falhou");
+                            let _ = send_command_result(
+                                &config,
+                                &command.id,
+                                false,
+                                None,
+                                Some(format!("Erro interno ao executar comando: {}", join_err)),
+                            )
+                            .await;
+                        }
+                        Ok(Err(exec_err)) => {
+                            let msg = exec_err.to_string();
+                            error!(error = %msg, command_id = %command.id, "Comando remoto falhou");
+                            let _ = send_command_result(&config, &command.id, false, None, Some(msg)).await;
+                        }
+                        Ok(Ok(output)) => {
+                            info!(command_id = %command.id, bytes = output.len(), "Comando executado com sucesso");
+                            if let Err(err) =
+                                send_command_result(&config, &command.id, true, Some(output), None).await
+                            {
+                                error!(error = %err, command_id = %command.id, "Falha ao enviar resultado");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        sleep(Duration::from_secs(3)).await;
+    }
+}
+
+async fn run_metrics_loop(config: Arc<Config>) {
+    info!("Loop de métricas iniciado");
+    loop {
+        // Heartbeat
         if let Err(err) = send_heartbeat(&config).await {
             error!(error = %err, "Falha ao enviar heartbeat");
         }
+
+        // Fila offline
         flush_offline_queue(&config).await;
-        let snapshot = collect_once(&config).await;
+
+        // Métricas
+        let collected_at = Utc::now().to_rfc3339();
+        let cfg_clone = Arc::clone(&config);
+        let snapshot = tokio::task::spawn_blocking(move || {
+            match run_sqlplus_metrics(&cfg_clone) {
+                Ok(overview) => json!({
+                    "agentId":      cfg_clone.agent_id,
+                    "customerName": cfg_clone.customer_name,
+                    "environment":  cfg_clone.environment,
+                    "version":      "3.2.3-rust",
+                    "host":         hostname(),
+                    "snapshot": {
+                        "ok":          true,
+                        "collectedAt": collected_at,
+                        "host":        hostname(),
+                        "overview":    overview,
+                        "collector":   "rust-sqlplus"
+                    }
+                }),
+                Err(err) => json!({
+                    "agentId":      cfg_clone.agent_id,
+                    "customerName": cfg_clone.customer_name,
+                    "environment":  cfg_clone.environment,
+                    "version":      "3.2.3-rust",
+                    "host":         hostname(),
+                    "snapshot": {
+                        "ok":          false,
+                        "collectedAt": collected_at,
+                        "host":        hostname(),
+                        "message":     err.to_string(),
+                        "collector":   "rust-sqlplus"
+                    }
+                }),
+            }
+        })
+        .await
+        .unwrap_or_else(|e| json!({ "error": e.to_string() }));
+
         match send_metrics(&config, snapshot.clone()).await {
             Ok(_) => info!("Métricas enviadas para API Central"),
             Err(err) => {
@@ -519,10 +622,30 @@ async fn run_loop() -> Result<()> {
                 }
             }
         }
-        poll_and_execute_commands(&config).await;
-        sleep(Duration::from_secs(config.interval_seconds.max(10))).await;
+
+        let interval = config.interval_seconds.max(10);
+        sleep(Duration::from_secs(interval)).await;
     }
 }
+
+async fn run_loop() -> Result<()> {
+    let config = Arc::new(load_config()?);
+    info!(agent_id = %config.agent_id, version = "3.2.3-rust", "Oracle DBA Agent Rust iniciado");
+
+    // Dois loops independentes em paralelo:
+    //  - comandos: polling a cada 3s
+    //  - métricas:  coleta a cada interval_seconds
+    tokio::join!(
+        run_command_loop(Arc::clone(&config)),
+        run_metrics_loop(Arc::clone(&config)),
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Windows Service
+// ---------------------------------------------------------------------------
 
 #[cfg(windows)]
 mod service {
@@ -530,7 +653,10 @@ mod service {
     use std::ffi::OsString;
     use std::sync::mpsc;
     use std::time::Duration as StdDuration;
-    use windows_service::service::{ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType};
+    use windows_service::service::{
+        ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
+        ServiceType,
+    };
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
     use windows_service::{define_windows_service, service_dispatcher};
 
@@ -551,24 +677,25 @@ mod service {
 
     fn run_service_main() -> Result<()> {
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
-        let status_handle = service_control_handler::register(SERVICE_NAME, move |control_event| {
-            match control_event {
-                ServiceControl::Stop | ServiceControl::Shutdown => {
-                    let _ = shutdown_tx.send(());
-                    ServiceControlHandlerResult::NoError
+        let status_handle =
+            service_control_handler::register(SERVICE_NAME, move |control_event| {
+                match control_event {
+                    ServiceControl::Stop | ServiceControl::Shutdown => {
+                        let _ = shutdown_tx.send(());
+                        ServiceControlHandlerResult::NoError
+                    }
+                    _ => ServiceControlHandlerResult::NotImplemented,
                 }
-                _ => ServiceControlHandlerResult::NotImplemented,
-            }
-        })?;
+            })?;
 
         status_handle.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: ServiceState::Running,
+            service_type:     ServiceType::OWN_PROCESS,
+            current_state:    ServiceState::Running,
             controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
-            exit_code: ServiceExitCode::Win32(0),
-            checkpoint: 0,
-            wait_hint: StdDuration::default(),
-            process_id: None,
+            exit_code:        ServiceExitCode::Win32(0),
+            checkpoint:       0,
+            wait_hint:        StdDuration::default(),
+            process_id:       None,
         })?;
 
         let runtime = tokio::runtime::Runtime::new()?;
@@ -577,17 +704,21 @@ mod service {
         handle.abort();
 
         status_handle.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: ServiceState::Stopped,
+            service_type:     ServiceType::OWN_PROCESS,
+            current_state:    ServiceState::Stopped,
             controls_accepted: ServiceControlAccept::empty(),
-            exit_code: ServiceExitCode::Win32(0),
-            checkpoint: 0,
-            wait_hint: StdDuration::default(),
-            process_id: None,
+            exit_code:        ServiceExitCode::Win32(0),
+            checkpoint:       0,
+            wait_hint:        StdDuration::default(),
+            process_id:       None,
         })?;
         Ok(())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Entrypoint
+// ---------------------------------------------------------------------------
 
 fn is_service_mode() -> bool {
     env::args().any(|a| a == "--service")
@@ -596,6 +727,7 @@ fn is_service_mode() -> bool {
 fn main() -> Result<()> {
     let cfg = load_config().ok();
     init_logs(cfg.as_ref());
+
     if is_service_mode() {
         #[cfg(windows)]
         {
