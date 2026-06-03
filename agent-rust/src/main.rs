@@ -138,17 +138,46 @@ fn sqlplus_connect_string(oracle: &OracleConfig) -> String {
 // SQLPlus — execução de scripts/consultas remotos
 // ---------------------------------------------------------------------------
 
-fn is_query_sql(sql: &str) -> bool {
+fn strip_sql_comments_for_detection(sql: &str) -> String {
     let mut cleaned = String::new();
-    for line in sql.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("--") || trimmed.is_empty() {
+    let mut chars = sql.chars().peekable();
+    let mut in_block_comment = false;
+
+    while let Some(ch) = chars.next() {
+        if in_block_comment {
+            if ch == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_block_comment = false;
+            }
             continue;
         }
-        cleaned.push_str(trimmed);
-        cleaned.push(' ');
+
+        if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            in_block_comment = true;
+            cleaned.push(' ');
+            continue;
+        }
+
+        if ch == '-' && chars.peek() == Some(&'-') {
+            chars.next();
+            while let Some(next_ch) = chars.next() {
+                if next_ch == '\n' || next_ch == '\r' {
+                    cleaned.push(' ');
+                    break;
+                }
+            }
+            continue;
+        }
+
+        cleaned.push(ch);
     }
-    let lower = cleaned.trim_start().to_lowercase();
+
+    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_query_sql(sql: &str) -> bool {
+    let lower = strip_sql_comments_for_detection(sql).trim_start().to_lowercase();
     lower.starts_with("select ") || lower.starts_with("with ")
 }
 

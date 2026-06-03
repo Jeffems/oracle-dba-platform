@@ -28,16 +28,20 @@ function sleep(ms: number) {
 }
 
 /** Retorna true se o SQL é uma consulta (SELECT / WITH) */
-function isSelectQuery(sql: string): boolean {
-  const first = sql
+function removeSqlComments(sql: string): string {
+  return sql
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .split(/\r?\n/)
-    .map((l) => l.trim())
-    .find((l) => l && !l.startsWith('--'));
-  if (!first) return false;
-  const lower = first.toLowerCase();
-  return lower.startsWith('select ') || lower.startsWith('with ');
+    .map((line) => line.replace(/--.*$/g, '').trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
 }
 
+function isSelectQuery(sql: string): boolean {
+  const lower = removeSqlComments(sql).toLowerCase();
+  return lower.startsWith('select ') || lower.startsWith('with ');
+}
 // ---------------------------------------------------------------------------
 // Parser CSV robusto
 // Suporta aspas duplas, escapes "" e campos com vírgulas/quebras de linha.
