@@ -42,47 +42,60 @@ function isSelectQuery(sql: string): boolean {
 // Funciona com output do SQLPlus: set markup csv on delimiter , quote on
 // ---------------------------------------------------------------------------
 
+/**
+ * Parser de CSV tolerante ao output do SQLPlus 19c:
+ * - Cabeçalho sempre entre aspas: "COL1","COL2"
+ * - Valores numéricos SEM aspas: 1,2.5
+ * - Valores texto COM aspas: "abc","def"
+ * - Aspas duplas como escape: "val""com""aspas"
+ */
 function parseCsvLine(line: string): string[] {
   const cols: string[] = [];
   let cur = '';
   let inQ = false;
+  let i = 0;
 
-  for (let i = 0; i < line.length; i++) {
+  while (i < line.length) {
     const ch = line[i];
     if (ch === '"') {
       if (inQ && line[i + 1] === '"') {
         cur += '"';
-        i++;
-      } else {
-        inQ = !inQ;
+        i += 2;
+        continue;
       }
-    } else if (ch === ',' && !inQ) {
+      inQ = !inQ;
+      i++;
+      continue;
+    }
+    if (ch === ',' && !inQ) {
       cols.push(cur.trim());
       cur = '';
-    } else {
-      cur += ch;
+      i++;
+      continue;
     }
+    cur += ch;
+    i++;
   }
   cols.push(cur.trim());
   return cols;
 }
 
 /**
- * Recebe o texto CSV bruto do spool do SQLPlus e converte para QueryResult.
- *
- * O SQLPlus com "markup csv on" gera sempre:
- *   "COL1","COL2",...
- *   "val1","val2",...
- *
- * Retorna null se o texto não parecer CSV válido.
+ * Detecta se o texto é CSV do SQLPlus.
+ * O cabeçalho SEMPRE tem aspas (mesmo no 19c), então basta checar a primeira linha.
+ * Valores numéricos nas linhas de dados podem vir sem aspas — isso é normal.
  */
+function looksLikeSqlplusCsv(text: string): boolean {
+  const firstLine = text.split(/\r?\n/).find((l) => l.trim());
+  // Cabeçalho do SQLPlus com markup csv sempre começa com aspas
+  return Boolean(firstLine && firstLine.trim().startsWith('"'));
+}
+
 function parseCsvToResult(raw: string): QueryResult | null {
-  // Filtra apenas ruídos do SQLPlus — não mexe em linhas CSV
   const lines = raw
     .split(/\r?\n/)
     .filter((line) => {
       const t = line.trim();
-      // Descarta linhas de ruído do SQLPlus e linhas completamente vazias
       if (!t) return false;
       if (/^session altered\.?$/i.test(t)) return false;
       if (/^commit complete\.?$/i.test(t)) return false;
@@ -90,12 +103,9 @@ function parseCsvToResult(raw: string): QueryResult | null {
     });
 
   if (lines.length === 0) return null;
+  if (!looksLikeSqlplusCsv(lines.join('\n'))) return null;
 
-  // A primeira linha não-vazia deve começar com aspas para ser CSV válido
-  const header = lines[0].trim();
-  if (!header.startsWith('"')) return null;
-
-  const columns = parseCsvLine(header).map((c, i) => c || `COL_${i + 1}`);
+  const columns = parseCsvLine(lines[0]).map((c, i) => c || `COL_${i + 1}`);
 
   const rows = lines.slice(1).map((line) => {
     const vals = parseCsvLine(line);
@@ -108,7 +118,9 @@ function parseCsvToResult(raw: string): QueryResult | null {
 
   return {
     ok: true,
-    message: rows.length > 0 ? 'Consulta executada com sucesso.' : 'Consulta executada sem linhas retornadas.',
+    message: rows.length > 0
+      ? 'Consulta executada com sucesso.'
+      : 'Consulta executada sem linhas retornadas.',
     rows,
     metaData: columns.map((name) => ({ name })),
   };
