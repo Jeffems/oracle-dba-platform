@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, Cloud, Database, HardDrive, Play, RefreshCcw, Save, Server, TerminalSquare, Wifi, Zap } from 'lucide-react';
+import { Activity, AlertTriangle, Cloud, Database, HardDrive, Play, RefreshCcw, Save, Server, TerminalSquare, Trash2, Wifi, Zap } from 'lucide-react';
 import {
+  clearCentralCommandHistory,
   getCentralClients,
   getCentralCommands,
   getCentralHealth,
@@ -119,6 +120,24 @@ export function CentralCloudDashboard() {
     }
   }
 
+
+  async function clearHistory() {
+    const agentId = selected?.agentId || selectedAgent;
+    const scope = agentId ? 'deste Agent selecionado' : 'de todos os Agents';
+    const ok = window.confirm(`Limpar histórico de comandos ${scope}? Comandos QUEUED e IN_PROGRESS não serão removidos.`);
+    if (!ok) return;
+    setLoading(true);
+    try {
+      const result = await clearCentralCommandHistory(config, agentId || undefined);
+      setMessage(result.message || `${result.deleted || 0} comando(s) removido(s) do histórico.`);
+      await load();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
     load();
     const id = window.setInterval(load, 30000);
@@ -154,6 +173,6 @@ export function CentralCloudDashboard() {
 
     <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><h3 className="flex items-center gap-2 text-xl font-bold"><TerminalSquare size={18}/> Remote Script Runner</h3><p className="mt-1 text-sm text-slate-400">O app não conecta direto no Oracle do cliente. Ele enfileira a tarefa na API Central, e o Agent Rust executa localmente no servidor Oracle.</p><div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-[1fr_auto]"><select className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-3" value={selected?.agentId || selectedAgent} onChange={(e) => setSelectedAgent(e.target.value)}>{clients.map((client) => <option key={client.agentId} value={client.agentId}>{client.customerName || client.agentId} — {client.environment || 'ambiente'}</option>)}</select><label className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-sm text-amber-200"><input type="checkbox" checked={allowDangerous} onChange={(e) => setAllowDangerous(e.target.checked)} /> liberar comandos críticos</label></div><textarea className="mt-3 min-h-44 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 font-mono text-sm" value={sql} onChange={(e) => setSql(e.target.value)} /><button onClick={queueScript} disabled={loading || !selected?.agentId} className="mt-3 inline-flex items-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 font-semibold text-slate-950 disabled:opacity-50"><Play size={18}/> Enfileirar script</button></section>
 
-    <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><h3 className="flex items-center gap-2 text-xl font-bold"><Activity size={18}/> Histórico de comandos</h3><div className="mt-4 max-h-96 overflow-auto rounded-xl border border-slate-800"><table className="min-w-full text-sm"><thead className="bg-slate-950 text-slate-300"><tr><th className="px-3 py-2 text-left">Status</th><th className="px-3 py-2 text-left">Agent</th><th className="px-3 py-2 text-left">Criado</th><th className="px-3 py-2 text-left">Finalizado</th><th className="px-3 py-2 text-left">Retorno</th></tr></thead><tbody>{commands.map((cmd) => <tr key={cmd.id} className="border-t border-slate-800"><td className="px-3 py-2"><span className={`rounded-full px-2 py-1 text-xs ${cmd.status === 'SUCCESS' ? 'bg-emerald-500/15 text-emerald-300' : cmd.status === 'FAILED' ? 'bg-rose-500/15 text-rose-300' : 'bg-amber-500/15 text-amber-300'}`}>{cmd.status}</span></td><td className="px-3 py-2 font-mono text-xs">{cmd.agentId}</td><td className="px-3 py-2">{fmtDate(cmd.createdAt)}</td><td className="px-3 py-2">{fmtDate(cmd.finishedAt)}</td><td className="px-3 py-2 max-w-xl"><pre className="max-h-28 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{cmd.error || cmd.output || cmd.note || '-'}</pre></td></tr>)}</tbody></table>{!commands.length && <div className="p-4 text-slate-400">Nenhum comando encontrado.</div>}</div></section>
+    <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><h3 className="flex items-center gap-2 text-xl font-bold"><Activity size={18}/> Histórico de comandos</h3><button onClick={clearHistory} disabled={loading || !commands.length} className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-200 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"><Trash2 size={16}/> Limpar histórico</button></div><div className="mt-4 max-h-96 overflow-auto rounded-xl border border-slate-800"><table className="min-w-full text-sm"><thead className="bg-slate-950 text-slate-300"><tr><th className="px-3 py-2 text-left">Status</th><th className="px-3 py-2 text-left">Agent</th><th className="px-3 py-2 text-left">Criado</th><th className="px-3 py-2 text-left">Finalizado</th><th className="px-3 py-2 text-left">Retorno</th></tr></thead><tbody>{commands.map((cmd) => <tr key={cmd.id} className="border-t border-slate-800"><td className="px-3 py-2"><span className={`rounded-full px-2 py-1 text-xs ${cmd.status === 'SUCCESS' ? 'bg-emerald-500/15 text-emerald-300' : cmd.status === 'FAILED' ? 'bg-rose-500/15 text-rose-300' : 'bg-amber-500/15 text-amber-300'}`}>{cmd.status}</span></td><td className="px-3 py-2 font-mono text-xs">{cmd.agentId}</td><td className="px-3 py-2">{fmtDate(cmd.createdAt)}</td><td className="px-3 py-2">{fmtDate(cmd.finishedAt)}</td><td className="px-3 py-2 max-w-xl"><pre className="max-h-28 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{cmd.error || cmd.output || cmd.note || '-'}</pre></td></tr>)}</tbody></table>{!commands.length && <div className="p-4 text-slate-400">Nenhum comando encontrado.</div>}</div></section>
   </div>;
 }

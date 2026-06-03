@@ -124,3 +124,11 @@ export async function queueCentralScript(config: CentralApiConfig, payload: { ag
     body: JSON.stringify({ ...payload, type: 'SQL_SCRIPT' })
   });
 }
+
+
+export async function clearCentralCommandHistory(config: CentralApiConfig, agentId?: string) {
+  const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
+  return centralFetch<{ ok: boolean; deleted: number; message?: string }>(config, `/api/scripts/history${query}`, {
+    method: 'DELETE'
+  });
+}

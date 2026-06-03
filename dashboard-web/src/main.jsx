@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Activity, AlertTriangle, BellRing, Code2, Cpu, Database, Gauge, HardDrive, Play, RefreshCcw, Server, ShieldCheck, TerminalSquare, Wifi, Zap } from 'lucide-react';
+import { Activity, AlertTriangle, BellRing, Code2, Cpu, Database, Gauge, HardDrive, Play, RefreshCcw, Server, ShieldCheck, TerminalSquare, Trash2, Wifi, Zap } from 'lucide-react';
 import './styles.css';
 
 const DEFAULT_API_URL = localStorage.getItem('centralApiUrl') || import.meta.env.VITE_API_URL || 'http://127.0.0.1:4090';
@@ -94,6 +94,27 @@ function App() {
     }
   }
 
+
+  async function clearCommandHistory() {
+    const scope = selectedAgent ? `do Agent ${selectedAgent}` : 'de todos os Agents';
+    const ok = window.confirm(`Limpar o histórico de comandos ${scope}? Comandos em fila ou em execução serão mantidos.`);
+    if (!ok) return;
+    setLoading(true);
+    try {
+      const query = selectedAgent ? `?agentId=${encodeURIComponent(selectedAgent)}` : '';
+      const res = await apiFetch(`/api/scripts/history${query}`, { method: 'DELETE' });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.message || `HTTP ${res.status}`);
+      setCommands(prev => prev.filter(cmd => ['QUEUED', 'IN_PROGRESS'].includes(cmd.status)));
+      setMessage(body.message || 'Histórico de comandos limpo.');
+      await load();
+    } catch (err) {
+      setMessage(err?.message || String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function queueScript() {
     if (!selectedAgent) return setMessage('Selecione um Agent antes de enfileirar script.');
     if (!sql.trim()) return setMessage('Informe um SQL/script.');
@@ -138,7 +159,7 @@ function App() {
 
     <section className="panel"><h2><Gauge size={20}/> Gráficos históricos</h2><div className="chart-toolbar"><label>Agent<select value={selectedAgent} onChange={e => setSelectedAgent(e.target.value)}><option value="">Todos</option>{clients.map(c => <option key={c.agentId} value={c.agentId}>{c.customerName || c.agentId}</option>)}</select></label><span>{selectedMetrics.length} amostras carregadas</span></div><div className="charts"><MiniLineChart rows={selectedMetrics} metric="ACTIVE_SESSIONS" label="Sessões ativas"/><MiniLineChart rows={selectedMetrics} metric="TABLESPACE_MAX_USED_PCT" label="Uso máximo de tablespace (%)" maxHint={100}/><MiniLineChart rows={selectedMetrics} metric="LOCKS_WAITING" label="Locks em espera"/><MiniLineChart rows={selectedMetrics} metric="DB_TIME_SECONDS" label="DB Time acumulado (s)"/></div></section>
 
-    <section className="two-cols"><div className="panel"><h2><TerminalSquare size={20}/> Executar script via Agent</h2><p className="muted left">O navegador não conecta direto no Oracle. A API enfileira a tarefa e o Agent executa localmente no servidor do cliente.</p><label className="field">Agent<select value={selectedAgent} onChange={e => setSelectedAgent(e.target.value)}>{clients.map(c => <option key={c.agentId} value={c.agentId}>{c.customerName || c.agentId}</option>)}</select></label><label className="field">SQL / Script<textarea value={sql} onChange={e => setSql(e.target.value)} rows={9}/></label><label className="check"><input type="checkbox" checked={allowDangerous} onChange={e => setAllowDangerous(e.target.checked)} /> Liberar comandos críticos nesta execução</label><button onClick={queueScript} disabled={loading || !selectedAgent}><Play size={18}/> Enfileirar execução</button></div><div className="panel"><h2><Code2 size={20}/> Histórico de comandos</h2><div className="commands">{commands.length ? commands.map(cmd => <details key={cmd.id} className="command"><summary><span className={`pill ${statusClass(cmd.status)}`}>{cmd.status}</span><strong>{cmd.agentId || 'Todos agents'}</strong><small>{fmtDate(cmd.createdAt)}</small></summary><div className="command-body"><p>{cmd.note}</p><pre>{cmd.sql || '-'}</pre>{cmd.output && <><b>Output</b><pre>{cmd.output}</pre></>}{cmd.error && <><b>Erro</b><pre className="error-pre">{cmd.error}</pre></>}</div></details>) : <p className="muted">Nenhum comando criado.</p>}</div></div></section>
+    <section className="two-cols"><div className="panel"><h2><TerminalSquare size={20}/> Executar script via Agent</h2><p className="muted left">O navegador não conecta direto no Oracle. A API enfileira a tarefa e o Agent executa localmente no servidor do cliente.</p><label className="field">Agent<select value={selectedAgent} onChange={e => setSelectedAgent(e.target.value)}>{clients.map(c => <option key={c.agentId} value={c.agentId}>{c.customerName || c.agentId}</option>)}</select></label><label className="field">SQL / Script<textarea value={sql} onChange={e => setSql(e.target.value)} rows={9}/></label><label className="check"><input type="checkbox" checked={allowDangerous} onChange={e => setAllowDangerous(e.target.checked)} /> Liberar comandos críticos nesta execução</label><button onClick={queueScript} disabled={loading || !selectedAgent}><Play size={18}/> Enfileirar execução</button></div><div className="panel"><div className="panel-title-row"><h2><Code2 size={20}/> Histórico de comandos</h2><button className="danger-button" onClick={clearCommandHistory} disabled={loading || !commands.some(cmd => !['QUEUED', 'IN_PROGRESS'].includes(cmd.status))}><Trash2 size={18}/> Limpar histórico</button></div><p className="muted left">Remove somente comandos finalizados, com erro ou bloqueados. Comandos em fila ou execução são mantidos.</p><div className="commands">{commands.length ? commands.map(cmd => <details key={cmd.id} className="command"><summary><span className={`pill ${statusClass(cmd.status)}`}>{cmd.status}</span><strong>{cmd.agentId || 'Todos agents'}</strong><small>{fmtDate(cmd.createdAt)}</small></summary><div className="command-body"><p>{cmd.note}</p><pre>{cmd.sql || '-'}</pre>{cmd.output && <><b>Output</b><pre>{cmd.output}</pre></>}{cmd.error && <><b>Erro</b><pre className="error-pre">{cmd.error}</pre></>}</div></details>) : <p className="muted">Nenhum comando criado.</p>}</div></div></section>
 
     <section className="two-cols"><div className="panel"><h2><Gauge size={20}/> Métricas enterprise</h2><div className="enterprise-grid">{clients.slice(0, 6).map(c => <div className="mini" key={c.agentId}><strong>{c.customerName || c.agentId}</strong><span>DB Time: {compact(c.dbTimeSeconds)}s</span><span>Logical Reads: {compact(c.logicalReads)}</span><span>Physical Reads: {compact(c.physicalReads)}</span><span>Execuções: {compact(c.executions)}</span><span>Parse Count: {compact(c.parseCountTotal)}</span><span>Redo: {compact(c.redoSizeMb)} MB</span></div>)}</div></div><div className="panel"><h2><AlertTriangle size={20}/> Alertas</h2>{alerts.length ? alerts.map((a, i) => <div className={`alert ${a.level}`} key={i}>{a.message}</div>) : <p className="muted">Nenhum alerta ativo.</p>}<h3>Histórico</h3>{alertHistory.slice(0,8).map(a => <div className={`alert ${a.level}`} key={a.id}>{fmtDate(a.at)} — {a.message}</div>)}</div></section>
 

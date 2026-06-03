@@ -50,7 +50,7 @@ function send(res, status, body) {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS'
+    'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS'
   });
   res.end(JSON.stringify(body, null, 2));
 }
@@ -298,6 +298,18 @@ const server = http.createServer(async (req, res) => {
       const where = agentId ? { agentId } : {};
       const rows = await prisma.command.findMany({ where, orderBy: { createdAt: 'desc' }, take: 100 });
       return send(res, 200, { ok: true, rows: rows.map(normalizeCommand) });
+    }
+    if (req.method === 'DELETE' && req.url?.startsWith('/api/scripts/history')) {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const agentId = url.searchParams.get('agentId') || undefined;
+      const where = {
+        status: { notIn: ['QUEUED', 'IN_PROGRESS'] },
+        ...(agentId ? { agentId } : {})
+      };
+      const result = await prisma.command.deleteMany({ where });
+      await audit('script.history.clear', { agentId: agentId || null, deleted: result.count });
+      broadcast('state', await currentState());
+      return send(res, 200, { ok: true, deleted: result.count, message: `${result.count} comando(s) removido(s) do histórico.` });
     }
     if (req.method === 'POST' && req.url === '/api/commands/claim') {
       const body = await readJson(req);
