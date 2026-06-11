@@ -20,6 +20,11 @@ struct OracleConfig {
     connect_string: String,
     #[serde(rename = "asSysdba", default)]
     as_sysdba: bool,
+    /// Quando true, comandos de STARTUP/SHUTDOWN são executados localmente como:
+    /// sqlplus / as sysdba
+    /// Isso é necessário porque após SHUTDOWN o listener não conhece mais o serviço.
+    #[serde(rename = "localSysdba", default)]
+    local_sysdba: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -181,6 +186,22 @@ fn is_query_sql(sql: &str) -> bool {
     lower.starts_with("select ") || lower.starts_with("with ")
 }
 
+fn is_instance_control_sql(sql: &str) -> bool {
+    let lower = strip_sql_comments_for_detection(sql).trim_start().to_lowercase();
+    lower.starts_with("startup")
+        || lower.starts_with("shutdown")
+        || lower.contains(" startup")
+        || lower.contains(" shutdown")
+}
+
+fn sqlplus_args_for_sql(config: &Config, sql: &str) -> Vec<String> {
+    if config.oracle.local_sysdba && is_instance_control_sql(sql) {
+        vec!["-S".to_string(), "/".to_string(), "as".to_string(), "sysdba".to_string()]
+    } else {
+        vec!["-S".to_string(), sqlplus_connect_string(&config.oracle)]
+    }
+}
+
 /// Filtra ruídos do SQLPlus apenas para uso em mensagens de erro.
 /// NUNCA usar no conteúdo CSV — destrói os dados.
 fn strip_sqlplus_noise(text: &str) -> String {
@@ -206,6 +227,12 @@ fn sqlplus_ready_sql(sql: &str) -> String {
     let trimmed = sql.trim();
     if trimmed.is_empty() {
         return String::new();
+    }
+
+    // STARTUP/SHUTDOWN são comandos do SQLPlus, não SQL comum.
+    // Não adicionar ; porque pode gerar SP2-0306/SP2-0734 dependendo da versão.
+    if is_instance_control_sql(trimmed) {
+        return trimmed.to_string();
     }
 
     let last_line = trimmed
@@ -259,9 +286,11 @@ fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
     use std::io::Write;
     use std::process::Stdio;
 
+    let sqlplus_args = sqlplus_args_for_sql(config, sql);
+    info!(args = ?sqlplus_args, local_sysdba = config.oracle.local_sysdba, "Iniciando SQLPlus");
+
     let mut child = Command::new(&config.oracle.sqlplus_path)
-        .arg("-S")
-        .arg(sqlplus_connect_string(&config.oracle))
+        .args(&sqlplus_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -715,12 +744,19 @@ mod service {
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
     use windows_service::{define_windows_service, service_dispatcher};
 
-    const SERVICE_NAME: &str = "OracleDBAAgentRust";
+    const DEFAULT_SERVICE_NAME: &str = "OracleDBAAgent";
+
+    fn configured_service_name() -> String {
+        super::arg_value("--service-name")
+            .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string())
+    }
 
     define_windows_service!(ffi_service_main, service_main);
 
     pub fn run_service() -> Result<()> {
-        service_dispatcher::start(SERVICE_NAME, ffi_service_main)?;
+        let service_name = configured_service_name();
+        info!(service_name = %service_name, "Iniciando dispatcher do Windows Service");
+        service_dispatcher::start(service_name, ffi_service_main)?;
         Ok(())
     }
 
@@ -733,7 +769,7 @@ mod service {
     fn run_service_main() -> Result<()> {
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
         let status_handle =
-            service_control_handler::register(SERVICE_NAME, move |control_event| {
+            service_control_handler::register(configured_service_name(), move |control_event| {
                 match control_event {
                     ServiceControl::Stop | ServiceControl::Shutdown => {
                         let _ = shutdown_tx.send(());
@@ -755,8 +791,24 @@ mod service {
 
         let runtime = tokio::runtime::Runtime::new()?;
         let handle = runtime.spawn(async { super::run_loop().await });
-        let _ = shutdown_rx.recv();
-        handle.abort();
+
+        // Mantém o serviço vivo até receber Stop/Shutdown.
+        // Se o loop principal falhar, registra no log para evitar que o serviço pare "sem explicar".
+        loop {
+            if shutdown_rx.try_recv().is_ok() {
+                handle.abort();
+                break;
+            }
+            if handle.is_finished() {
+                match runtime.block_on(handle) {
+                    Ok(Ok(_)) => info!("Loop principal do Agent finalizado"),
+                    Ok(Err(err)) => error!(error = %err, "Loop principal do Agent falhou"),
+                    Err(err) => error!(error = %err, "Task principal do Agent abortada/falhou"),
+                }
+                break;
+            }
+            std::thread::sleep(StdDuration::from_secs(1));
+        }
 
         status_handle.set_service_status(ServiceStatus {
             service_type:     ServiceType::OWN_PROCESS,
@@ -779,14 +831,37 @@ fn is_service_mode() -> bool {
     env::args().any(|a| a == "--service")
 }
 
+fn is_console_mode() -> bool {
+    env::args().any(|a| a == "--console" || a == "-console")
+}
+
 fn main() -> Result<()> {
     let cfg = load_config().ok();
     init_logs(cfg.as_ref());
 
+    if is_console_mode() {
+        let cfg_path = config_path();
+        println!("Oracle DBA Agent iniciando em modo console...");
+        println!("Config: {}", cfg_path.display());
+        if let Some(cfg) = cfg.as_ref() {
+            println!("Agent ID: {}", cfg.agent_id);
+            println!("API Central: {}", cfg.api_url);
+            println!("Intervalo: {}s", cfg.interval_seconds);
+            println!("Log dir: {}", cfg.log_dir.clone().unwrap_or_else(|| exe_dir().join("logs").display().to_string()));
+        } else {
+            println!("ATENÇÃO: config.json não foi carregado. O erro detalhado aparecerá abaixo.");
+        }
+    }
+
     if is_service_mode() {
         #[cfg(windows)]
         {
-            return service::run_service();
+            if let Err(err) = service::run_service() {
+                error!(error = %err, "Falha ao iniciar modo serviço");
+                eprintln!("Falha ao iniciar modo serviço: {err}");
+                return Err(err);
+            }
+            return Ok(());
         }
         #[cfg(not(windows))]
         {

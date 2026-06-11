@@ -2,7 +2,7 @@ import { useState, useRef } from 'react';
 import { useConnectionStore } from '../stores/useConnectionStore';
 
 // ---------------------------------------------------------------------------
-// Página de diagnóstico remoto — v3.2.3
+// Página de diagnóstico remoto — v3.2.4
 // Testa cada etapa do fluxo App → API Central → Agent → Oracle
 // e mostra o resultado bruto de cada passo.
 // ---------------------------------------------------------------------------
@@ -15,7 +15,14 @@ type LogEntry = {
 };
 
 function ts() {
-  return new Date().toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 });
+  const now = new Date();
+  const time = now.toLocaleTimeString('pt-BR', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+  return `${time}.${String(now.getMilliseconds()).padStart(3, '0')}`;
 }
 
 export function RemoteDiag() {
@@ -103,7 +110,7 @@ export function RemoteDiag() {
             sql: sql.trim(),
             allowDangerous: true,
             type: 'SQL_SCRIPT',
-            note: 'DIAGNÓSTICO v3.2.3',
+            note: 'DIAGNÓSTICO v3.2.4',
           }),
         });
         addLog('info', `→ HTTP ${r.status} — resposta bruta:`, r.text);

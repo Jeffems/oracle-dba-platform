@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-$ServiceName = "OracleDBAAgentRust"
+$ServiceName = "OracleDBAAgent"
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
   throw "Execute este script como Administrador."
 }

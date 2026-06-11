@@ -10,7 +10,8 @@
     "user": "system",
     "password": "senha",
     "connectString": "192.168.0.10:1521/ORCL",
-    "asSysdba": false
+    "asSysdba": false,
+    "localSysdba": true
   },
   "logDir": "C:\\ProgramData\\OracleDBAAgent\\logs"
 }

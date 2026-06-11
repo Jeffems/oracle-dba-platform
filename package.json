@@ -1,6 +1,6 @@
 {
   "name": "oracle-dba-tauri-react",
-  "version": "3.2.5",
+  "version": "3.3.1",
   "private": true,
   "description": "Oracle DBA Desktop profissional",
   "type": "module",
@@ -32,32 +32,33 @@
     "agent:rust:run": "cd agent-rust && cargo run -- --console --config config.json",
     "agent:rust:install": "powershell -ExecutionPolicy Bypass -File agent-rust/scripts/install-service.ps1",
     "agent:rust:uninstall": "powershell -ExecutionPolicy Bypass -File agent-rust/scripts/uninstall-service.ps1",
-    "agent:rust:package": "powershell -ExecutionPolicy Bypass -File agent-rust/scripts/package-agent.ps1"
+    "agent:rust:package": "powershell -ExecutionPolicy Bypass -File agent-rust/scripts/package-agent.ps1",
+    "build:windows-release": "powershell -ExecutionPolicy Bypass -File scripts/build-windows-release.ps1"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
-    "@prisma/client": "^6.9.0",
-    "@tanstack/react-query": "^5.62.0",
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-shell": "^2.2.0",
+    "@tanstack/react-query": "^5.62.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
     "oracledb": "^6.7.0",
     "tailwind-merge": "^2.5.5",
-    "zustand": "^5.0.2"
+    "zustand": "^5.0.2",
+    "@prisma/client": "^6.9.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.2.0",
-    "@types/node": "^22.19.19",
+    "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
-    "prisma": "^6.9.0",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vite": "^6.0.3"
+    "vite": "^6.0.3",
+    "prisma": "^6.9.0"
   }
 }

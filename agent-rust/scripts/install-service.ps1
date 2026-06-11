@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
-$ServiceName = "OracleDBAAgentRust"
-$DisplayName = "Oracle DBA Agent Rust"
+$ServiceName = "OracleDBAAgent"
+$DisplayName = "Oracle DBA Agent"
 $InstallDir = "C:\Program Files\OracleDBAAgent"
 $DataDir = "C:\ProgramData\OracleDBAAgent"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -36,9 +36,9 @@ if ($Existing) {
 }
 
 $Exe = Join-Path $InstallDir "oracle-dba-agent.exe"
-$BinPath = "`"$Exe`" --service --config `"$TargetConfig`""
+$BinPath = "`"$Exe`" --service --service-name $ServiceName --config `"$TargetConfig`""
 sc.exe create $ServiceName binPath= $BinPath start= auto DisplayName= $DisplayName | Out-Host
-sc.exe description $ServiceName "Oracle DBA Enterprise Agent em Rust - v3.0.0" | Out-Host
+sc.exe description $ServiceName "Oracle DBA Enterprise Agent - v3.3.2" | Out-Host
 sc.exe failure $ServiceName reset= 86400 actions= restart/60000/restart/60000/restart/300000 | Out-Host
 sc.exe start $ServiceName | Out-Host
 Write-Host "Serviço instalado e iniciado: $ServiceName" -ForegroundColor Green
