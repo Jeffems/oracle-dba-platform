@@ -1,6 +1,6 @@
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import type { QueryResult, ScriptExecutionLog } from '../types/oracle';
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import type { QueryResult, ScriptExecutionLog } from "../types/oracle";
 
 export type CurrentStatementState = {
   index: number;
@@ -36,16 +36,26 @@ type WorksheetState = {
 type ModuleStateStore = {
   templates: Record<string, TemplateModuleState>;
   worksheet: WorksheetState;
-  getTemplateState: (moduleKey: string, defaults: Record<string, string>, defaultTemplateId: string) => TemplateModuleState;
-  patchTemplateState: (moduleKey: string, patch: Partial<TemplateModuleState>) => void;
-  patchTemplateValues: (moduleKey: string, values: Record<string, string>) => void;
+  getTemplateState: (
+    moduleKey: string,
+    defaults: Record<string, string>,
+    defaultTemplateId: string,
+  ) => TemplateModuleState;
+  patchTemplateState: (
+    moduleKey: string,
+    patch: Partial<TemplateModuleState>,
+  ) => void;
+  patchTemplateValues: (
+    moduleKey: string,
+    values: Record<string, string>,
+  ) => void;
   patchWorksheet: (patch: Partial<WorksheetState>) => void;
   resetRuntime: (moduleKey: string) => void;
   resetWorksheetRuntime: () => void;
 };
 
 const defaultWorksheet: WorksheetState = {
-  sql: 'SELECT * FROM dual;',
+  sql: "SELECT * FROM dual;",
   result: undefined,
   busy: false,
   elapsedMs: 0,
@@ -55,7 +65,10 @@ const defaultWorksheet: WorksheetState = {
   cancelRequested: false,
 };
 
-function createTemplateState(defaults: Record<string, string>, defaultTemplateId: string): TemplateModuleState {
+function createTemplateState(
+  defaults: Record<string, string>,
+  defaultTemplateId: string,
+): TemplateModuleState {
   return {
     values: defaults,
     templateId: defaultTemplateId,
@@ -79,20 +92,32 @@ export const useModuleStateStore = create<ModuleStateStore>()(
         const existing = get().templates[moduleKey];
         if (existing) {
           const mergedValues = { ...defaults, ...existing.values };
-          if (JSON.stringify(mergedValues) !== JSON.stringify(existing.values)) {
+          if (
+            JSON.stringify(mergedValues) !== JSON.stringify(existing.values)
+          ) {
             set((state) => ({
               templates: {
                 ...state.templates,
-                [moduleKey]: { ...existing, values: mergedValues, templateId: existing.templateId || defaultTemplateId },
+                [moduleKey]: {
+                  ...existing,
+                  values: mergedValues,
+                  templateId: existing.templateId || defaultTemplateId,
+                },
               },
             }));
-            return { ...existing, values: mergedValues, templateId: existing.templateId || defaultTemplateId };
+            return {
+              ...existing,
+              values: mergedValues,
+              templateId: existing.templateId || defaultTemplateId,
+            };
           }
           return existing;
         }
 
         const created = createTemplateState(defaults, defaultTemplateId);
-        set((state) => ({ templates: { ...state.templates, [moduleKey]: created } }));
+        set((state) => ({
+          templates: { ...state.templates, [moduleKey]: created },
+        }));
         return created;
       },
 
@@ -101,7 +126,7 @@ export const useModuleStateStore = create<ModuleStateStore>()(
           templates: {
             ...state.templates,
             [moduleKey]: {
-              ...(state.templates[moduleKey] ?? createTemplateState({}, '')),
+              ...(state.templates[moduleKey] ?? createTemplateState({}, "")),
               ...patch,
             },
           },
@@ -112,7 +137,7 @@ export const useModuleStateStore = create<ModuleStateStore>()(
           templates: {
             ...state.templates,
             [moduleKey]: {
-              ...(state.templates[moduleKey] ?? createTemplateState({}, '')),
+              ...(state.templates[moduleKey] ?? createTemplateState({}, "")),
               values: {
                 ...(state.templates[moduleKey]?.values ?? {}),
                 ...values,
@@ -165,7 +190,7 @@ export const useModuleStateStore = create<ModuleStateStore>()(
         }),
     }),
     {
-      name: 'oracle-dba-module-state',
+      name: "oracle-dba-module-state",
       partialize: (state) => ({
         templates: Object.fromEntries(
           Object.entries(state.templates).map(([key, value]) => [
@@ -179,7 +204,7 @@ export const useModuleStateStore = create<ModuleStateStore>()(
               startedAt: undefined,
               cancelRequested: false,
             },
-          ])
+          ]),
         ),
         worksheet: {
           ...state.worksheet,
@@ -191,6 +216,6 @@ export const useModuleStateStore = create<ModuleStateStore>()(
           cancelRequested: false,
         },
       }),
-    }
-  )
+    },
+  ),
 );

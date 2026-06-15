@@ -1,6 +1,6 @@
 export function splitSqlStatements(script: string): string[] {
   const statements: string[] = [];
-  let current = '';
+  let current = "";
   let inSingle = false;
   let inDouble = false;
   let inLineComment = false;
@@ -12,13 +12,13 @@ export function splitSqlStatements(script: string): string[] {
 
     if (inLineComment) {
       current += ch;
-      if (ch === '\n') inLineComment = false;
+      if (ch === "\n") inLineComment = false;
       continue;
     }
 
     if (inBlockComment) {
       current += ch;
-      if (ch === '*' && next === '/') {
+      if (ch === "*" && next === "/") {
         current += next;
         i++;
         inBlockComment = false;
@@ -27,13 +27,13 @@ export function splitSqlStatements(script: string): string[] {
     }
 
     if (!inSingle && !inDouble) {
-      if (ch === '-' && next === '-') {
+      if (ch === "-" && next === "-") {
         current += ch + next;
         i++;
         inLineComment = true;
         continue;
       }
-      if (ch === '/' && next === '*') {
+      if (ch === "/" && next === "*") {
         current += ch + next;
         i++;
         inBlockComment = true;
@@ -58,10 +58,10 @@ export function splitSqlStatements(script: string): string[] {
       continue;
     }
 
-    if (ch === ';' && !inSingle && !inDouble) {
+    if (ch === ";" && !inSingle && !inDouble) {
       const trimmed = current.trim();
       if (trimmed) statements.push(trimmed);
-      current = '';
+      current = "";
       continue;
     }
 

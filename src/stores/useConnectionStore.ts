@@ -1,9 +1,12 @@
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import type { OracleConnectionConfig } from '../types/oracle';
-import type { CentralApiConfig, CentralClient } from '../services/centralApiClient';
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import type { OracleConnectionConfig } from "../types/oracle";
+import type {
+  CentralApiConfig,
+  CentralClient,
+} from "../services/centralApiClient";
 
-export type ConnectionMode = 'local' | 'remote';
+export type ConnectionMode = "local" | "remote";
 
 export type RemoteConnectionState = {
   config: CentralApiConfig;
@@ -27,30 +30,59 @@ type ConnectionState = {
 export const useConnectionStore = create<ConnectionState>()(
   persist(
     (set, get) => ({
-      mode: 'local',
-      config: { user: '', password: '', connectString: '' },
+      mode: "local",
+      config: { user: "", password: "", connectString: "" },
       remote: {
         config: {
-          apiUrl: import.meta.env.VITE_API_URL || 'http://127.0.0.1:4090',
-          apiToken: import.meta.env.VITE_API_TOKEN || 'dev-token-change-me'
+          apiUrl: import.meta.env.VITE_API_URL || "http://127.0.0.1:4090",
+          apiToken: import.meta.env.VITE_API_TOKEN || "dev-token-change-me",
         },
-        selectedAgentId: '',
-        selectedAgent: null
+        selectedAgentId: "",
+        selectedAgent: null,
       },
       connected: false,
-      status: 'Desconectado',
-      setMode: (mode) => set({ mode, connected: false, status: mode === 'local' ? 'Modo local selecionado' : 'Modo remoto selecionado' }),
+      status: "Desconectado",
+      setMode: (mode) =>
+        set({
+          mode,
+          connected: false,
+          status:
+            mode === "local"
+              ? "Modo local selecionado"
+              : "Modo remoto selecionado",
+        }),
       setConfig: (config) => set({ config }),
-      setRemoteConfig: (config) => set((state) => ({ remote: { ...state.remote, config } })),
-      setSelectedAgent: (agentId, agent = null) => set((state) => ({ remote: { ...state.remote, selectedAgentId: agentId, selectedAgent: agent } })),
+      setRemoteConfig: (config) =>
+        set((state) => ({ remote: { ...state.remote, config } })),
+      setSelectedAgent: (agentId, agent = null) =>
+        set((state) => ({
+          remote: {
+            ...state.remote,
+            selectedAgentId: agentId,
+            selectedAgent: agent,
+          },
+        })),
       setConnected: (connected, status) => {
         const mode = get().mode;
-        set({ connected, status: status ?? (connected ? (mode === 'local' ? 'Conectado localmente' : 'Conectado remotamente') : 'Desconectado') });
+        set({
+          connected,
+          status:
+            status ??
+            (connected
+              ? mode === "local"
+                ? "Conectado localmente"
+                : "Conectado remotamente"
+              : "Desconectado"),
+        });
       },
     }),
     {
-      name: 'oracle-dba-connection-state',
-      partialize: (state) => ({ mode: state.mode, config: state.config, remote: state.remote }),
-    }
-  )
+      name: "oracle-dba-connection-state",
+      partialize: (state) => ({
+        mode: state.mode,
+        config: state.config,
+        remote: state.remote,
+      }),
+    },
+  ),
 );

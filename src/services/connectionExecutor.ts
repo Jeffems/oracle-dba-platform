@@ -1,7 +1,11 @@
-import { executeSingleStatement } from './oracleClient';
-import { getCentralCommands, queueCentralScript, type CentralApiConfig } from './centralApiClient';
-import type { OracleConnectionConfig, QueryResult } from '../types/oracle';
-import type { ConnectionMode } from '../stores/useConnectionStore';
+import { executeSingleStatement } from "./oracleClient";
+import {
+  getCentralCommands,
+  queueCentralScript,
+  type CentralApiConfig,
+} from "./centralApiClient";
+import type { OracleConnectionConfig, QueryResult } from "../types/oracle";
+import type { ConnectionMode } from "../stores/useConnectionStore";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -30,17 +34,17 @@ function sleep(ms: number) {
 /** Retorna true se o SQL é uma consulta (SELECT / WITH) */
 function removeSqlComments(sql: string): string {
   return sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
     .split(/\r?\n/)
-    .map((line) => line.replace(/--.*$/g, '').trim())
+    .map((line) => line.replace(/--.*$/g, "").trim())
     .filter(Boolean)
-    .join(' ')
+    .join(" ")
     .trim();
 }
 
 function isSelectQuery(sql: string): boolean {
   const lower = removeSqlComments(sql).toLowerCase();
-  return lower.startsWith('select ') || lower.startsWith('with ');
+  return lower.startsWith("select ") || lower.startsWith("with ");
 }
 // ---------------------------------------------------------------------------
 // Parser CSV robusto
@@ -57,7 +61,7 @@ function isSelectQuery(sql: string): boolean {
  */
 function parseCsvLine(line: string): string[] {
   const cols: string[] = [];
-  let cur = '';
+  let cur = "";
   let inQ = false;
   let i = 0;
 
@@ -73,9 +77,9 @@ function parseCsvLine(line: string): string[] {
       i++;
       continue;
     }
-    if (ch === ',' && !inQ) {
+    if (ch === "," && !inQ) {
       cols.push(cur.trim());
-      cur = '';
+      cur = "";
       i++;
       continue;
     }
@@ -98,18 +102,16 @@ function looksLikeSqlplusCsv(text: string): boolean {
 }
 
 function parseCsvToResult(raw: string): QueryResult | null {
-  const lines = raw
-    .split(/\r?\n/)
-    .filter((line) => {
-      const t = line.trim();
-      if (!t) return false;
-      if (/^session altered\.?$/i.test(t)) return false;
-      if (/^commit complete\.?$/i.test(t)) return false;
-      return true;
-    });
+  const lines = raw.split(/\r?\n/).filter((line) => {
+    const t = line.trim();
+    if (!t) return false;
+    if (/^session altered\.?$/i.test(t)) return false;
+    if (/^commit complete\.?$/i.test(t)) return false;
+    return true;
+  });
 
   if (lines.length === 0) return null;
-  if (!looksLikeSqlplusCsv(lines.join('\n'))) return null;
+  if (!looksLikeSqlplusCsv(lines.join("\n"))) return null;
 
   const columns = parseCsvLine(lines[0]).map((c, i) => c || `COL_${i + 1}`);
 
@@ -117,16 +119,17 @@ function parseCsvToResult(raw: string): QueryResult | null {
     const vals = parseCsvLine(line);
     const row: Record<string, string> = {};
     columns.forEach((col, i) => {
-      row[col] = vals[i] ?? '';
+      row[col] = vals[i] ?? "";
     });
     return row;
   });
 
   return {
     ok: true,
-    message: rows.length > 0
-      ? 'Consulta executada com sucesso.'
-      : 'Consulta executada sem linhas retornadas.',
+    message:
+      rows.length > 0
+        ? "Consulta executada com sucesso."
+        : "Consulta executada sem linhas retornadas.",
     rows,
     metaData: columns.map((name) => ({ name })),
   };
@@ -136,26 +139,29 @@ function parseCsvToResult(raw: string): QueryResult | null {
 // Interpreta o campo output que vem da API Central
 // ---------------------------------------------------------------------------
 
-function outputToResult(sql: string, output: string | null | undefined): QueryResult {
-  const text = (output ?? '').trim();
+function outputToResult(
+  sql: string,
+  output: string | null | undefined,
+): QueryResult {
+  const text = (output ?? "").trim();
 
   // DDL/DML — não precisa de tabela
   if (!isSelectQuery(sql)) {
     return {
       ok: true,
-      message: text || 'Comando executado com sucesso.',
+      message: text || "Comando executado com sucesso.",
       rows: [],
       rowsAffected: 0,
     };
   }
 
   // Sentinel que o Agent envia quando o spool ficou vazio
-  if (!text || text === '__EMPTY_RESULT__') {
+  if (!text || text === "__EMPTY_RESULT__") {
     return {
       ok: true,
-      message: 'Consulta executada sem linhas retornadas.',
+      message: "Consulta executada sem linhas retornadas.",
       rows: [],
-      metaData: [{ name: 'RESULTADO' }],
+      metaData: [{ name: "RESULTADO" }],
     };
   }
 
@@ -169,15 +175,22 @@ function outputToResult(sql: string, output: string | null | undefined): QueryRe
     .map((l) => l.trimEnd())
     .filter((l) => {
       const t = l.trim();
-      return t && !/^session altered\.?$/i.test(t) && !/^commit complete\.?$/i.test(t);
+      return (
+        t &&
+        !/^session altered\.?$/i.test(t) &&
+        !/^commit complete\.?$/i.test(t)
+      );
     })
     .map((l) => ({ RESULTADO: l }));
 
   return {
     ok: true,
     rows,
-    metaData: [{ name: 'RESULTADO' }],
-    message: rows.length > 0 ? 'Consulta executada com sucesso.' : 'Consulta executada sem linhas retornadas.',
+    metaData: [{ name: "RESULTADO" }],
+    message:
+      rows.length > 0
+        ? "Consulta executada com sucesso."
+        : "Consulta executada sem linhas retornadas.",
   };
 }
 
@@ -189,16 +202,27 @@ export async function executeWithCurrentConnection(
   input: UnifiedExecutionInput,
 ): Promise<QueryResult> {
   // --- Modo local ---
-  if (input.mode === 'local') {
-    return executeSingleStatement(input.localConfig, input.sql, input.executionId, input.signal);
+  if (input.mode === "local") {
+    return executeSingleStatement(
+      input.localConfig,
+      input.sql,
+      input.executionId,
+      input.signal,
+    );
   }
 
   // --- Modo remoto via Agent ---
   if (!input.remoteConfig.apiUrl.trim()) {
-    return { ok: false, message: 'Configure a URL da API Central antes de executar remotamente.' };
+    return {
+      ok: false,
+      message: "Configure a URL da API Central antes de executar remotamente.",
+    };
   }
   if (!input.agentId.trim()) {
-    return { ok: false, message: 'Selecione um Agent remoto antes de executar.' };
+    return {
+      ok: false,
+      message: "Selecione um Agent remoto antes de executar.",
+    };
   }
 
   // Enfileira o script na API Central
@@ -208,24 +232,25 @@ export async function executeWithCurrentConnection(
       agentId: input.agentId,
       sql: input.sql,
       allowDangerous: Boolean(input.allowDangerous),
-      note: 'Criado pelo App Desktop v3.2.4',
+      note: "Criado pelo App Desktop v3.2.4",
     });
   } catch (err) {
     return {
       ok: false,
-      message: err instanceof Error ? err.message : 'Erro ao conectar na API Central.',
+      message:
+        err instanceof Error ? err.message : "Erro ao conectar na API Central.",
     };
   }
 
   if (!queued.ok || queued.blocked || !queued.command?.id) {
     return {
       ok: false,
-      message: queued.message || 'Script não foi enfileirado pela API Central.',
+      message: queued.message || "Script não foi enfileirado pela API Central.",
     };
   }
 
   const commandId = queued.command.id;
-  const started   = Date.now();
+  const started = Date.now();
   const timeoutMs = input.timeoutMs ?? 120_000;
 
   // Polling: aguarda o Agent executar e reportar o resultado
@@ -247,14 +272,17 @@ export async function executeWithCurrentConnection(
     const command = (commands.rows ?? []).find((r) => r.id === commandId);
     if (!command) continue;
 
-    if (command.status === 'SUCCESS') {
+    if (command.status === "SUCCESS") {
       return outputToResult(input.sql, command.output);
     }
 
-    if (command.status === 'FAILED') {
+    if (command.status === "FAILED") {
       return {
         ok: false,
-        message: command.error || command.output || 'Comando remoto falhou sem mensagem de erro.',
+        message:
+          command.error ||
+          command.output ||
+          "Comando remoto falhou sem mensagem de erro.",
       };
     }
 
@@ -264,7 +292,7 @@ export async function executeWithCurrentConnection(
   return {
     ok: false,
     message:
-      'Tempo limite aguardando retorno do Agent remoto. ' +
-      'Verifique se o Agent está online e se a URL/token da API estão corretos.',
+      "Tempo limite aguardando retorno do Agent remoto. " +
+      "Verifique se o Agent está online e se a URL/token da API estão corretos.",
   };
 }
