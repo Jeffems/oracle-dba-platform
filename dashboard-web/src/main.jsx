@@ -11,9 +11,12 @@ import {
   Gauge,
   HardDrive,
   Lock,
+  LayoutDashboard,
+  List,
   Play,
   RefreshCcw,
   Server,
+  Search,
   ShieldCheck,
   TerminalSquare,
   Trash2,
@@ -22,7 +25,7 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-const VERSION = '3.3.4';
+const VERSION = '3.3.5';
 const DEFAULT_API_URL = localStorage.getItem('centralApiUrl') || import.meta.env.VITE_API_URL || 'http://127.0.0.1:4090';
 const DEFAULT_TOKEN = localStorage.getItem('centralApiToken') || import.meta.env.VITE_API_TOKEN || 'dev-token-change-me';
 
@@ -53,6 +56,24 @@ function statusClass(status) {
   if (status === 'FAILED' || status === 'BLOCKED_REVIEW_REQUIRED') return 'danger';
   if (status === 'IN_PROGRESS') return 'info';
   return 'warn';
+}
+
+function clientSeverity(c) {
+  if (!ageOk(c.lastSeenAt)) return 'offline';
+  if (n(c.maxTablespacePct) >= 90 || n(c.blockedSessions) > 0 || n(c.locksWaiting) > 0) return 'critical';
+  if (n(c.maxTablespacePct) >= 80) return 'warning';
+  return 'healthy';
+}
+function severityLabel(sev) {
+  if (sev === 'critical') return 'Crítico';
+  if (sev === 'warning') return 'Atenção';
+  if (sev === 'offline') return 'Offline';
+  return 'OK';
+}
+function severityTone(sev) {
+  if (sev === 'critical') return 'danger';
+  if (sev === 'warning' || sev === 'offline') return 'warn';
+  return 'ok';
 }
 function metricRows(snapshot) { return snapshot?.overview || snapshot?.OVERVIEW || []; }
 function metricValue(snapshot, key) {
@@ -171,7 +192,67 @@ function AgentCard({ c, selected, onSelect }) {
     <small>{c.host || c.agentId}</small>
     <div className="agent-metrics"><span>Sessões <b>{compact(c.activeSessions,0)}</b></span><span>Locks <b>{compact(c.locksWaiting,0)}</b></span><span>TS <b className={health}>{compact(c.maxTablespacePct,0)}%</b></span></div>
   </button>;
+}function AgentCard({ c, selected, onSelect }) {
+  const online = ageOk(c.lastSeenAt);
+  const health = n(c.maxTablespacePct) >= 90 || n(c.blockedSessions) > 0 || n(c.locksWaiting) > 0 ? 'danger' : n(c.maxTablespacePct) >= 80 ? 'warn' : 'ok';
+  return <button className={`agent-card ${selected ? 'selected' : ''}`} onClick={onSelect}>
+    <div className="agent-card-top"><span className={`dot ${online ? 'ok' : 'off'}`}/><strong>{c.customerName || c.agentId}</strong><Pill tone={online ? 'ok' : 'warn'}>{online ? 'Online' : 'Offline'}</Pill></div>
+    <small>{c.host || c.agentId}</small>
+    <div className="agent-metrics"><span>Sessões <b>{compact(c.activeSessions,0)}</b></span><span>Locks <b>{compact(c.locksWaiting,0)}</b></span><span>TS <b className={health}>{compact(c.maxTablespacePct,0)}%</b></span></div>
+  </button>;
 }
+
+function ClientListView({ clients, selectedAgent, onSelect, filterText, statusFilter, density }) {
+  const rows = clients
+    .filter(c => {
+      const sev = clientSeverity(c);
+      if (statusFilter !== 'all' && sev !== statusFilter) return false;
+      const q = filterText.trim().toLowerCase();
+      if (!q) return true;
+      return [c.customerName, c.agentId, c.host, c.environment]
+        .filter(Boolean)
+        .some(v => String(v).toLowerCase().includes(q));
+    })
+    .sort((a, b) => {
+      const rank = { critical: 0, warning: 1, offline: 2, healthy: 3 };
+      const ra = rank[clientSeverity(a)] ?? 9;
+      const rb = rank[clientSeverity(b)] ?? 9;
+      if (ra !== rb) return ra - rb;
+      return n(b.maxTablespacePct) - n(a.maxTablespacePct);
+    });
+
+  return <section className={`panel client-list-panel density-${density}`}>
+    <div className="list-header-row">
+      <div>
+        <h2><List size={20}/> Modo lista — clientes</h2>
+        <p>Visão compacta para monitor dedicado com 50+ clientes. Ordena críticos primeiro.</p>
+      </div>
+      <div className="list-count"><strong>{rows.length}</strong><span>visíveis</span></div>
+    </div>
+
+    <div className="client-list-table">
+      <div className="client-list-head">
+        <span>Status</span><span>Cliente / Agent</span><span>Ambiente</span><span>Último heartbeat</span><span>Sessões</span><span>Locks</span><span>TS máx.</span><span>PGA</span><span>DB Time</span>
+      </div>
+      {rows.length ? rows.map(c => {
+        const sev = clientSeverity(c);
+        const pgaPct = Math.min(100, n(c.pgaAllocMb) / Math.max(n(c.pgaLimitMb || c.pgaTargetMb || 2048), 1) * 100);
+        return <button key={c.agentId} className={`client-list-row ${selectedAgent === c.agentId ? 'selected' : ''} sev-${sev}`} onClick={() => onSelect(c.agentId)}>
+          <span className="status-cell"><i className={`beacon ${sev}`}/><Pill tone={severityTone(sev)}>{severityLabel(sev)}</Pill></span>
+          <span className="client-cell"><strong>{c.customerName || c.agentId}</strong><small>{c.agentId}</small></span>
+          <span>{c.environment || '-'}</span>
+          <span>{fmtTime(c.lastSeenAt)}<small>{fmtDate(c.lastSeenAt)}</small></span>
+          <span className="num">{compact(c.activeSessions,0)}<small>ativas</small></span>
+          <span className={`num ${n(c.locksWaiting) > 0 ? 'danger-text' : ''}`}>{compact(c.locksWaiting,0)}<small>{compact(c.blockedSessions,0)} bloqueadas</small></span>
+          <span className="metric-with-bar"><b>{compact(c.maxTablespacePct,0)}%</b><ProgressBar value={c.maxTablespacePct}/></span>
+          <span className="metric-with-bar"><b>{compact(pgaPct,0)}%</b><ProgressBar value={pgaPct}/></span>
+          <span className="num">{compact(c.dbTimeSeconds)}s<small>redo {compact(c.redoSizeMb)} MB</small></span>
+        </button>;
+      }) : <div className="empty-list">Nenhum cliente encontrado com os filtros atuais.</div>}
+    </div>
+  </section>;
+}
+
 
 function App() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
@@ -188,6 +269,10 @@ function App() {
   const [message, setMessage] = useState(`Dashboard Web v${VERSION} pronto.`);
   const [loading, setLoading] = useState(false);
   const [realtime, setRealtime] = useState(false);
+  const [viewMode, setViewMode] = useState(localStorage.getItem('dashboardWebViewMode') || 'cards');
+  const [clientFilter, setClientFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [density, setDensity] = useState(localStorage.getItem('dashboardWebDensity') || 'compact');
 
   const onlineCount = useMemo(() => clients.filter(c => ageOk(c.lastSeenAt)).length, [clients]);
   const critical = useMemo(() => alerts.filter(a => a.level === 'critical').length, [alerts]);
@@ -198,6 +283,7 @@ function App() {
   const allBlockedSessions = useMemo(() => clients.reduce((sum, c) => sum + n(c.blockedSessions), 0), [clients]);
   const maxTablespace = useMemo(() => Math.max(0, ...clients.map(c => n(c.maxTablespacePct))), [clients]);
   const totalLocks = useMemo(() => clients.reduce((sum, c) => sum + n(c.locksWaiting), 0), [clients]);
+  const severityCounts = useMemo(() => clients.reduce((acc, c) => { const sev = clientSeverity(c); acc[sev] = (acc[sev] || 0) + 1; return acc; }, {}), [clients]);
   const cpuSpark = useMemo(() => metricSeries(selectedMetrics, 'DB_CPU_SECONDS', 16), [selectedMetrics]);
   const sessionSpark = useMemo(() => metricSeries(selectedMetrics, 'ACTIVE_SESSIONS', 16), [selectedMetrics]);
   const tsSpark = useMemo(() => metricSeries(selectedMetrics, 'TABLESPACE_MAX_USED_PCT', 16), [selectedMetrics]);
@@ -276,6 +362,8 @@ function App() {
   }
 
   useEffect(() => { load(); const id = setInterval(load, 30000); return () => clearInterval(id); }, []);
+  useEffect(() => { localStorage.setItem('dashboardWebViewMode', viewMode); }, [viewMode]);
+  useEffect(() => { localStorage.setItem('dashboardWebDensity', density); }, [density]);
   useEffect(() => {
     const cleanApiUrl = apiUrl.trim().replace(/\/$/, '');
     const url = `${cleanApiUrl}/api/realtime?token=${encodeURIComponent(token)}`;
@@ -291,7 +379,7 @@ function App() {
     return () => es.close();
   }, [apiUrl, token]);
 
-  return <main>
+  return <main className={viewMode === 'list' ? 'list-mode' : ''}>
     <header className="hero noc-hero">
       <div>
         <p className="eyebrow">Oracle DBA Platform • NOC View</p>
@@ -303,6 +391,17 @@ function App() {
 
     <section className="panel settings glass"><label>URL da API Central<input value={apiUrl} onChange={e => setApiUrl(e.target.value)} /></label><label>Token<input value={token} onChange={e => setToken(e.target.value)} /></label><div className="status"><strong>Status:</strong> {message}</div></section>
 
+    <section className="panel view-toolbar glass">
+      <div className="view-mode-buttons">
+        <button className={viewMode === 'cards' ? 'active' : ''} onClick={() => setViewMode('cards')}><LayoutDashboard size={18}/> Dashboard</button>
+        <button className={viewMode === 'list' ? 'active' : ''} onClick={() => setViewMode('list')}><List size={18}/> Lista monitor</button>
+      </div>
+      <div className="list-summary"><span className="summary-ok">OK {severityCounts.healthy || 0}</span><span className="summary-warn">Atenção {severityCounts.warning || 0}</span><span className="summary-danger">Crítico {severityCounts.critical || 0}</span><span className="summary-off">Offline {severityCounts.offline || 0}</span></div>
+      <label className="search-box"><Search size={16}/><input placeholder="Filtrar cliente, agent, host..." value={clientFilter} onChange={e => setClientFilter(e.target.value)} /></label>
+      <label>Status<select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option value="all">Todos</option><option value="critical">Críticos</option><option value="warning">Atenção</option><option value="offline">Offline</option><option value="healthy">OK</option></select></label>
+      <label>Densidade<select value={density} onChange={e => setDensity(e.target.value)}><option value="compact">Compacta</option><option value="comfortable">Confortável</option></select></label>
+    </section>
+
     <section className="kpi-grid">
       <TopStat icon={Server} label="Agents online" value={`${onlineCount}/${clients.length}`} hint="Heartbeat < 2 minutos" tone={onlineCount ? 'green' : 'red'} />
       <TopStat icon={AlertTriangle} label="Alertas críticos" value={critical} hint="Eventos ativos" tone={critical ? 'red' : 'green'} />
@@ -312,9 +411,9 @@ function App() {
       <TopStat icon={Cpu} label="DB CPU" value={`${compact(getLatestMetric(metrics, selected?.agentId, 'DB_CPU_SECONDS') || selected?.dbCpuSeconds,1)}s`} hint={selected?.customerName || 'Agent selecionado'} tone="purple" spark={cpuSpark} />
     </section>
 
-    <section className="agent-strip">
+    {viewMode === 'list' ? <ClientListView clients={clients} selectedAgent={selectedAgent} onSelect={setSelectedAgent} filterText={clientFilter} statusFilter={statusFilter} density={density} /> : <section className="agent-strip">
       {clients.length ? clients.map(c => <AgentCard key={c.agentId} c={c} selected={selected?.agentId === c.agentId} onSelect={() => setSelectedAgent(c.agentId)} />) : <div className="panel empty">Nenhum Agent enviou métricas ainda.</div>}
-    </section>
+    </section>}
 
     <section className="overview-grid">
       <div className="panel selected-panel">
