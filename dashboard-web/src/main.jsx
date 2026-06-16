@@ -192,14 +192,6 @@ function AgentCard({ c, selected, onSelect }) {
     <small>{c.host || c.agentId}</small>
     <div className="agent-metrics"><span>Sessões <b>{compact(c.activeSessions,0)}</b></span><span>Locks <b>{compact(c.locksWaiting,0)}</b></span><span>TS <b className={health}>{compact(c.maxTablespacePct,0)}%</b></span></div>
   </button>;
-}function AgentCard({ c, selected, onSelect }) {
-  const online = ageOk(c.lastSeenAt);
-  const health = n(c.maxTablespacePct) >= 90 || n(c.blockedSessions) > 0 || n(c.locksWaiting) > 0 ? 'danger' : n(c.maxTablespacePct) >= 80 ? 'warn' : 'ok';
-  return <button className={`agent-card ${selected ? 'selected' : ''}`} onClick={onSelect}>
-    <div className="agent-card-top"><span className={`dot ${online ? 'ok' : 'off'}`}/><strong>{c.customerName || c.agentId}</strong><Pill tone={online ? 'ok' : 'warn'}>{online ? 'Online' : 'Offline'}</Pill></div>
-    <small>{c.host || c.agentId}</small>
-    <div className="agent-metrics"><span>Sessões <b>{compact(c.activeSessions,0)}</b></span><span>Locks <b>{compact(c.locksWaiting,0)}</b></span><span>TS <b className={health}>{compact(c.maxTablespacePct,0)}%</b></span></div>
-  </button>;
 }
 
 function ClientListView({ clients, selectedAgent, onSelect, filterText, statusFilter, density }) {
