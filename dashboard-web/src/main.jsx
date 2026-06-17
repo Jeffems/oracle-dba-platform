@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-const VERSION = '3.3.5';
+const VERSION = '3.3.6';
 const DEFAULT_API_URL = localStorage.getItem('centralApiUrl') || import.meta.env.VITE_API_URL || 'http://127.0.0.1:4090';
 const DEFAULT_TOKEN = localStorage.getItem('centralApiToken') || import.meta.env.VITE_API_TOKEN || 'dev-token-change-me';
 
@@ -184,17 +184,18 @@ function DonutPanel({ active, inactive, blocked }) {
   </svg><div className="donut-center"><strong>{compact(total,0)}</strong><span>sessões</span></div></div><div className="legend">{parts.map(p => <span key={p.label} className={p.cls}><i/> {p.label}: {compact(p.value,0)}</span>)}</div></div>;
 }
 
-function AgentCard({ c, selected, onSelect }) {
+function AgentCard({ c, selected, onSelect, onDelete }) {
   const online = ageOk(c.lastSeenAt);
   const health = n(c.maxTablespacePct) >= 90 || n(c.blockedSessions) > 0 || n(c.locksWaiting) > 0 ? 'danger' : n(c.maxTablespacePct) >= 80 ? 'warn' : 'ok';
-  return <button className={`agent-card ${selected ? 'selected' : ''}`} onClick={onSelect}>
+  return <div className={`agent-card ${selected ? 'selected' : ''}`} onClick={onSelect} role="button" tabIndex={0}>
+    <button className="delete-client-button" title="Excluir cliente" onClick={(e) => { e.stopPropagation(); onDelete(c); }}><Trash2 size={16}/></button>
     <div className="agent-card-top"><span className={`dot ${online ? 'ok' : 'off'}`}/><strong>{c.customerName || c.agentId}</strong><Pill tone={online ? 'ok' : 'warn'}>{online ? 'Online' : 'Offline'}</Pill></div>
     <small>{c.host || c.agentId}</small>
     <div className="agent-metrics"><span>Sessões <b>{compact(c.activeSessions,0)}</b></span><span>Locks <b>{compact(c.locksWaiting,0)}</b></span><span>TS <b className={health}>{compact(c.maxTablespacePct,0)}%</b></span></div>
-  </button>;
+  </div>;
 }
 
-function ClientListView({ clients, selectedAgent, onSelect, filterText, statusFilter, density }) {
+function ClientListView({ clients, selectedAgent, onSelect, onDelete, filterText, statusFilter, density }) {
   const rows = clients
     .filter(c => {
       const sev = clientSeverity(c);
@@ -224,12 +225,12 @@ function ClientListView({ clients, selectedAgent, onSelect, filterText, statusFi
 
     <div className="client-list-table">
       <div className="client-list-head">
-        <span>Status</span><span>Cliente / Agent</span><span>Ambiente</span><span>Último heartbeat</span><span>Sessões</span><span>Locks</span><span>TS máx.</span><span>PGA</span><span>DB Time</span>
+        <span>Status</span><span>Cliente / Agent</span><span>Ambiente</span><span>Último heartbeat</span><span>Sessões</span><span>Locks</span><span>TS máx.</span><span>PGA</span><span>DB Time</span><span>Ação</span>
       </div>
       {rows.length ? rows.map(c => {
         const sev = clientSeverity(c);
         const pgaPct = Math.min(100, n(c.pgaAllocMb) / Math.max(n(c.pgaLimitMb || c.pgaTargetMb || 2048), 1) * 100);
-        return <button key={c.agentId} className={`client-list-row ${selectedAgent === c.agentId ? 'selected' : ''} sev-${sev}`} onClick={() => onSelect(c.agentId)}>
+        return <div key={c.agentId} className={`client-list-row ${selectedAgent === c.agentId ? 'selected' : ''} sev-${sev}`} onClick={() => onSelect(c.agentId)} role="button" tabIndex={0}>
           <span className="status-cell"><i className={`beacon ${sev}`}/><Pill tone={severityTone(sev)}>{severityLabel(sev)}</Pill></span>
           <span className="client-cell"><strong>{c.customerName || c.agentId}</strong><small>{c.agentId}</small></span>
           <span>{c.environment || '-'}</span>
@@ -239,7 +240,8 @@ function ClientListView({ clients, selectedAgent, onSelect, filterText, statusFi
           <span className="metric-with-bar"><b>{compact(c.maxTablespacePct,0)}%</b><ProgressBar value={c.maxTablespacePct}/></span>
           <span className="metric-with-bar"><b>{compact(pgaPct,0)}%</b><ProgressBar value={pgaPct}/></span>
           <span className="num">{compact(c.dbTimeSeconds)}s<small>redo {compact(c.redoSizeMb)} MB</small></span>
-        </button>;
+          <span className="action-cell"><button className="delete-client-button inline" title="Excluir cliente" onClick={(e) => { e.stopPropagation(); onDelete(c); }}><Trash2 size={16}/></button></span>
+        </div>;
       }) : <div className="empty-list">Nenhum cliente encontrado com os filtros atuais.</div>}
     </div>
   </section>;
@@ -265,6 +267,7 @@ function App() {
   const [clientFilter, setClientFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [density, setDensity] = useState(localStorage.getItem('dashboardWebDensity') || 'compact');
+  const [pendingDelete, setPendingDelete] = useState(null);
 
   const onlineCount = useMemo(() => clients.filter(c => ageOk(c.lastSeenAt)).length, [clients]);
   const critical = useMemo(() => alerts.filter(a => a.level === 'critical').length, [alerts]);
@@ -339,6 +342,23 @@ function App() {
     finally { setLoading(false); }
   }
 
+
+  async function confirmDeleteClient() {
+    if (!pendingDelete?.agentId) return;
+    setLoading(true);
+    try {
+      const agentId = pendingDelete.agentId;
+      const res = await apiFetch(`/api/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' });
+      const body = await res.json();
+      if (!res.ok || !body.ok) throw new Error(body.message || `HTTP ${res.status}`);
+      setPendingDelete(null);
+      if (selectedAgent === agentId) setSelectedAgent('');
+      setMessage(body.message || 'Cliente excluído.');
+      await load();
+    } catch (err) { setMessage(`Erro ao excluir cliente: ${err.message}`); }
+    finally { setLoading(false); }
+  }
+
   async function queueScript() {
     if (!selectedAgent) return setMessage('Selecione um Agent antes de enfileirar script.');
     if (!sql.trim()) return setMessage('Informe um SQL/script.');
@@ -403,8 +423,8 @@ function App() {
       <TopStat icon={Cpu} label="DB CPU" value={`${compact(getLatestMetric(metrics, selected?.agentId, 'DB_CPU_SECONDS') || selected?.dbCpuSeconds,1)}s`} hint={selected?.customerName || 'Agent selecionado'} tone="purple" spark={cpuSpark} />
     </section>
 
-    {viewMode === 'list' ? <ClientListView clients={clients} selectedAgent={selectedAgent} onSelect={setSelectedAgent} filterText={clientFilter} statusFilter={statusFilter} density={density} /> : <section className="agent-strip">
-      {clients.length ? clients.map(c => <AgentCard key={c.agentId} c={c} selected={selected?.agentId === c.agentId} onSelect={() => setSelectedAgent(c.agentId)} />) : <div className="panel empty">Nenhum Agent enviou métricas ainda.</div>}
+    {viewMode === 'list' ? <ClientListView clients={clients} selectedAgent={selectedAgent} onSelect={setSelectedAgent} onDelete={setPendingDelete} filterText={clientFilter} statusFilter={statusFilter} density={density} /> : <section className="agent-strip">
+      {clients.length ? clients.map(c => <AgentCard key={c.agentId} c={c} selected={selected?.agentId === c.agentId} onSelect={() => setSelectedAgent(c.agentId)} onDelete={setPendingDelete} />) : <div className="panel empty">Nenhum Agent enviou métricas ainda.</div>}
     </section>}
 
     <section className="overview-grid">
@@ -428,6 +448,19 @@ function App() {
     <section className="two-cols"><div className="panel"><h2><Gauge size={20}/> Métricas enterprise</h2><div className="enterprise-grid">{clients.slice(0, 6).map(c => <div className="mini" key={c.agentId}><strong>{c.customerName || c.agentId}</strong><span>DB Time: {compact(c.dbTimeSeconds)}s</span><span>Logical Reads: {compact(c.logicalReads)}</span><span>Physical Reads: {compact(c.physicalReads)}</span><span>Execuções: {compact(c.executions)}</span><span>Parse Count: {compact(c.parseCountTotal)}</span><span>Redo: {compact(c.redoSizeMb)} MB</span></div>)}</div></div><div className="panel"><h2><BellRing size={20}/> Alertas</h2>{alerts.length ? alerts.map((a, i) => <div className={`alert ${a.level}`} key={i}>{a.message}</div>) : <p className="muted"><CheckCircle2 size={16}/> Nenhum alerta ativo.</p>}<h3>Histórico</h3>{alertHistory.slice(0,8).map(a => <div className={`alert ${a.level}`} key={a.id}>{fmtDate(a.at)} — {a.message}</div>)}</div></section>
 
     <section className="panel raw-panel"><h2><ShieldCheck size={20}/> Últimas métricas recebidas</h2><pre>{metrics.length ? JSON.stringify(metrics.slice(0, 3), null, 2) : 'Sem métricas.'}</pre></section>
+
+    {pendingDelete && <div className="modal-backdrop" onClick={() => setPendingDelete(null)}>
+      <div className="confirm-modal" onClick={(e) => e.stopPropagation()}>
+        <h2><Trash2 size={20}/> Excluir Cliente</h2>
+        <p>Tem certeza que deseja excluir este cliente?</p>
+        <strong>{pendingDelete.customerName || pendingDelete.agentId}</strong>
+        <small>{pendingDelete.agentId}</small>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={() => setPendingDelete(null)} disabled={loading}>Cancelar</button>
+          <button className="danger-button" onClick={confirmDeleteClient} disabled={loading}>Sim</button>
+        </div>
+      </div>
+    </div>}
   </main>;
 }
 
