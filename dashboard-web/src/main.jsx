@@ -885,9 +885,9 @@ function App() {
       <header className="hero noc-hero">
         <div>
           <p className="eyebrow">Estatísticas Oracle 19c • </p>
-          <h1>Dashboard Web v{VERSION} Em desenvolvimento </h1>
+          <h1>Dashboard Web v{VERSION}</h1>
           <p>
-            Visualização operacional
+           Projeto em desenvolvimento.
           </p>
         </div>
         <div className="hero-actions">
