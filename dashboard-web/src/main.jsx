@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-const VERSION = '3.3.6';
+const VERSION = '3.3.7';
 const DEFAULT_API_URL = localStorage.getItem('centralApiUrl') || import.meta.env.VITE_API_URL || 'http://127.0.0.1:4090';
 const DEFAULT_TOKEN = localStorage.getItem('centralApiToken') || import.meta.env.VITE_API_TOKEN || 'dev-token-change-me';
 
@@ -60,7 +60,10 @@ function statusClass(status) {
 
 function clientSeverity(c) {
   if (!ageOk(c.lastSeenAt)) return 'offline';
+  const bsev = backupSeverity(c);
+  if (bsev === 'critical') return 'critical';
   if (n(c.maxTablespacePct) >= 90 || n(c.blockedSessions) > 0 || n(c.locksWaiting) > 0) return 'critical';
+  if (bsev === 'warning') return 'warning';
   if (n(c.maxTablespacePct) >= 80) return 'warning';
   return 'healthy';
 }
@@ -74,6 +77,37 @@ function severityTone(sev) {
   if (sev === 'critical') return 'danger';
   if (sev === 'warning' || sev === 'offline') return 'warn';
   return 'ok';
+}
+
+function backupSeverity(c) {
+  const b = c?.backupStatus || {};
+  if (!b.enabled) return 'unknown';
+  const st = String(b.status || '').toUpperCase();
+  if (st === 'FAILED') return 'critical';
+  if (st === 'WARNING') return 'warning';
+  if (st === 'OK') return 'healthy';
+  return 'unknown';
+}
+function backupLabel(c) {
+  const b = c?.backupStatus || {};
+  if (!b.enabled) return 'Sem monitor';
+  const sev = backupSeverity(c);
+  if (sev === 'critical') return 'Falha';
+  if (sev === 'warning') return 'Atenção';
+  if (sev === 'healthy') return 'OK';
+  return 'Sem dados';
+}
+function backupTone(c) {
+  const sev = backupSeverity(c);
+  if (sev === 'critical') return 'danger';
+  if (sev === 'warning' || sev === 'unknown') return 'warn';
+  return 'ok';
+}
+function fmtBackupAge(c) {
+  const b = c?.backupStatus || {};
+  if (!b.enabled) return '-';
+  if (b.ageHours === undefined || b.ageHours === null) return '-';
+  return `${compact(b.ageHours, 1)}h`;
 }
 function metricRows(snapshot) { return snapshot?.overview || snapshot?.OVERVIEW || []; }
 function metricValue(snapshot, key) {
@@ -191,7 +225,7 @@ function AgentCard({ c, selected, onSelect, onDelete }) {
     <button className="delete-client-button" title="Excluir cliente" onClick={(e) => { e.stopPropagation(); onDelete(c); }}><Trash2 size={16}/></button>
     <div className="agent-card-top"><span className={`dot ${online ? 'ok' : 'off'}`}/><strong>{c.customerName || c.agentId}</strong><Pill tone={online ? 'ok' : 'warn'}>{online ? 'Online' : 'Offline'}</Pill></div>
     <small>{c.host || c.agentId}</small>
-    <div className="agent-metrics"><span>Sessões <b>{compact(c.activeSessions,0)}</b></span><span>Locks <b>{compact(c.locksWaiting,0)}</b></span><span>TS <b className={health}>{compact(c.maxTablespacePct,0)}%</b></span></div>
+    <div className="agent-metrics"><span>Sessões <b>{compact(c.activeSessions,0)}</b></span><span>Locks <b>{compact(c.locksWaiting,0)}</b></span><span>TS <b className={health}>{compact(c.maxTablespacePct,0)}%</b></span><span>Backup <b className={backupTone(c)}>{backupLabel(c)}</b></span></div>
   </div>;
 }
 
@@ -225,7 +259,7 @@ function ClientListView({ clients, selectedAgent, onSelect, onDelete, filterText
 
     <div className="client-list-table">
       <div className="client-list-head">
-        <span>Status</span><span>Cliente / Agent</span><span>Ambiente</span><span>Último heartbeat</span><span>Sessões</span><span>Locks</span><span>TS máx.</span><span>PGA</span><span>DB Time</span><span>Ação</span>
+        <span>Status</span><span>Cliente / Agent</span><span>Ambiente</span><span>Último heartbeat</span><span>Sessões</span><span>Locks</span><span>TS máx.</span><span>Backup</span><span>PGA</span><span>DB Time</span><span>Ação</span>
       </div>
       {rows.length ? rows.map(c => {
         const sev = clientSeverity(c);
@@ -238,6 +272,7 @@ function ClientListView({ clients, selectedAgent, onSelect, onDelete, filterText
           <span className="num">{compact(c.activeSessions,0)}<small>ativas</small></span>
           <span className={`num ${n(c.locksWaiting) > 0 ? 'danger-text' : ''}`}>{compact(c.locksWaiting,0)}<small>{compact(c.blockedSessions,0)} bloqueadas</small></span>
           <span className="metric-with-bar"><b>{compact(c.maxTablespacePct,0)}%</b><ProgressBar value={c.maxTablespacePct}/></span>
+          <span className="backup-cell"><Pill tone={backupTone(c)}>{backupLabel(c)}</Pill><small>{fmtBackupAge(c)} • {c.backupStatus?.latestFile || '-'}</small></span>
           <span className="metric-with-bar"><b>{compact(pgaPct,0)}%</b><ProgressBar value={pgaPct}/></span>
           <span className="num">{compact(c.dbTimeSeconds)}s<small>redo {compact(c.redoSizeMb)} MB</small></span>
           <span className="action-cell"><button className="delete-client-button inline" title="Excluir cliente" onClick={(e) => { e.stopPropagation(); onDelete(c); }}><Trash2 size={16}/></button></span>
@@ -278,6 +313,7 @@ function App() {
   const allBlockedSessions = useMemo(() => clients.reduce((sum, c) => sum + n(c.blockedSessions), 0), [clients]);
   const maxTablespace = useMemo(() => Math.max(0, ...clients.map(c => n(c.maxTablespacePct))), [clients]);
   const totalLocks = useMemo(() => clients.reduce((sum, c) => sum + n(c.locksWaiting), 0), [clients]);
+  const backupProblems = useMemo(() => clients.filter(c => ['critical', 'warning'].includes(backupSeverity(c))).length, [clients]);
   const severityCounts = useMemo(() => clients.reduce((acc, c) => { const sev = clientSeverity(c); acc[sev] = (acc[sev] || 0) + 1; return acc; }, {}), [clients]);
   const cpuSpark = useMemo(() => metricSeries(selectedMetrics, 'DB_CPU_SECONDS', 16), [selectedMetrics]);
   const sessionSpark = useMemo(() => metricSeries(selectedMetrics, 'ACTIVE_SESSIONS', 16), [selectedMetrics]);
@@ -419,6 +455,7 @@ function App() {
       <TopStat icon={AlertTriangle} label="Alertas críticos" value={critical} hint="Eventos ativos" tone={critical ? 'red' : 'green'} />
       <TopStat icon={Activity} label="Sessões ativas" value={compact(allActiveSessions,0)} hint="Total dos clientes" tone="cyan" spark={sessionSpark} />
       <TopStat icon={Lock} label="Locks em espera" value={compact(totalLocks,0)} hint="Quanto menor melhor" tone={totalLocks ? 'red' : 'green'} />
+      <TopStat icon={HardDrive} label="Backup diário" value={backupProblems} hint="Falhas/atenções ativas" tone={backupProblems ? 'red' : 'green'} />
       <TopStat icon={HardDrive} label="Tablespace máx." value={`${compact(maxTablespace,0)}%`} hint="Maior uso encontrado" tone={pctClass(maxTablespace) === 'danger' ? 'red' : pctClass(maxTablespace) === 'warn' ? 'yellow' : 'green'} spark={tsSpark} />
       <TopStat icon={Cpu} label="DB CPU" value={`${compact(getLatestMetric(metrics, selected?.agentId, 'DB_CPU_SECONDS') || selected?.dbCpuSeconds,1)}s`} hint={selected?.customerName || 'Agent selecionado'} tone="purple" spark={cpuSpark} />
     </section>
@@ -430,7 +467,7 @@ function App() {
     <section className="overview-grid">
       <div className="panel selected-panel">
         <div className="section-title"><h2><Database size={20}/> Agent selecionado</h2><span>{selected?.agentId || '-'}</span></div>
-        {selected ? <div className="selected-content"><div><h3>{selected.customerName || selected.agentId}</h3><p>{selected.host || 'Host não informado'} • {selected.environment || 'Ambiente'}</p><Pill tone={ageOk(selected.lastSeenAt) ? 'ok' : 'warn'}>{ageOk(selected.lastSeenAt) ? 'Online' : 'Offline'}</Pill><small>Último envio: {fmtDate(selected.lastSeenAt)}</small></div><div className="gauge-row"><GaugeRing value={selected.maxTablespacePct} label="Tablespace" sublabel="uso máximo"/><GaugeRing value={Math.min(100, n(selected.pgaAllocMb) / Math.max(n(selected.pgaLimitMb || selected.pgaTargetMb || 2048), 1) * 100)} label="PGA" sublabel={`${compact(selected.pgaAllocMb)} MB`}/><GaugeRing value={Math.min(100, n(selected.activeSessions) / Math.max(n(selected.sessionsLimit || 300), 1) * 100)} label="Sessões" sublabel={`${compact(selected.activeSessions,0)} ativas`}/></div></div> : <p className="empty">Selecione um Agent.</p>}
+        {selected ? <div className="selected-content"><div><h3>{selected.customerName || selected.agentId}</h3><p>{selected.host || 'Host não informado'} • {selected.environment || 'Ambiente'}</p><Pill tone={ageOk(selected.lastSeenAt) ? 'ok' : 'warn'}>{ageOk(selected.lastSeenAt) ? 'Online' : 'Offline'}</Pill><Pill tone={backupTone(selected)}>Backup {backupLabel(selected)}</Pill><small>Último envio: {fmtDate(selected.lastSeenAt)}</small><small>Último backup: {selected.backupStatus?.latestModifiedAt ? fmtDate(selected.backupStatus.latestModifiedAt) : '-'}</small><small>{selected.backupStatus?.message || ''}</small></div><div className="gauge-row"><GaugeRing value={selected.maxTablespacePct} label="Tablespace" sublabel="uso máximo"/><GaugeRing value={Math.min(100, n(selected.pgaAllocMb) / Math.max(n(selected.pgaLimitMb || selected.pgaTargetMb || 2048), 1) * 100)} label="PGA" sublabel={`${compact(selected.pgaAllocMb)} MB`}/><GaugeRing value={Math.min(100, n(selected.activeSessions) / Math.max(n(selected.sessionsLimit || 300), 1) * 100)} label="Sessões" sublabel={`${compact(selected.activeSessions,0)} ativas`}/></div></div> : <p className="empty">Selecione um Agent.</p>}
       </div>
       <DonutPanel active={allActiveSessions} inactive={allInactiveSessions} blocked={allBlockedSessions} />
       <BarsPanel clients={clients} />

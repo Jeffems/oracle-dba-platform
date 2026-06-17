@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{env, fs, path::PathBuf, process::Command, sync::Arc, time::Duration};
+use std::{env, fs, path::{Path, PathBuf}, process::Command, sync::Arc, time::{Duration, SystemTime}};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
@@ -28,6 +28,39 @@ struct OracleConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct BackupMonitorConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_backup_path")]
+    path: String,
+    #[serde(rename = "filePattern", default = "default_backup_file_pattern")]
+    file_pattern: String,
+    #[serde(rename = "logPath", default = "default_backup_log_path")]
+    log_path: String,
+    #[serde(rename = "maxAgeHours", default = "default_backup_max_age_hours")]
+    max_age_hours: u64,
+    #[serde(rename = "warnAgeHours", default = "default_backup_warn_age_hours")]
+    warn_age_hours: u64,
+    #[serde(rename = "errorKeywords", default = "default_backup_error_keywords")]
+    error_keywords: Vec<String>,
+}
+
+fn default_backup_path() -> String { "D:\\BackupService".to_string() }
+fn default_backup_file_pattern() -> String { "*.zip".to_string() }
+fn default_backup_log_path() -> String { "D:\\BackupService\\logs".to_string() }
+fn default_backup_max_age_hours() -> u64 { 24 }
+fn default_backup_warn_age_hours() -> u64 { 30 }
+fn default_backup_error_keywords() -> Vec<String> {
+    vec![
+        "erro".to_string(),
+        "error".to_string(),
+        "failed".to_string(),
+        "falha".to_string(),
+        "exception".to_string(),
+    ]
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct Config {
     #[serde(rename = "agentId")]
     agent_id: String,
@@ -41,6 +74,8 @@ struct Config {
     #[serde(rename = "intervalSeconds")]
     interval_seconds: u64,
     oracle: OracleConfig,
+    #[serde(rename = "backupMonitor")]
+    backup_monitor: Option<BackupMonitorConfig>,
     #[serde(rename = "logDir")]
     log_dir: Option<String>,
 }
@@ -414,6 +449,151 @@ exit
     Ok(rows)
 }
 
+
+// ---------------------------------------------------------------------------
+// Monitoramento de backup
+// ---------------------------------------------------------------------------
+
+fn wildcard_matches(pattern: &str, filename: &str) -> bool {
+    let p = pattern.trim().to_lowercase();
+    let f = filename.to_lowercase();
+    if p == "*" || p == "*.*" { return true; }
+    if let Some(ext) = p.strip_prefix("*.") { return f.ends_with(&format!(".{}", ext)); }
+    f == p
+}
+
+fn visit_files(dir: &Path, pattern: &str, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else { return; };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            visit_files(&path, pattern, out);
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|x| x.to_str()) else { continue; };
+        if wildcard_matches(pattern, name) { out.push(path); }
+    }
+}
+
+fn system_time_to_iso(t: SystemTime) -> String {
+    let dt: chrono::DateTime<Utc> = t.into();
+    dt.to_rfc3339()
+}
+
+fn latest_matching_file(dir: &Path, pattern: &str) -> Option<(PathBuf, SystemTime, u64)> {
+    let mut files = Vec::new();
+    visit_files(dir, pattern, &mut files);
+    files.into_iter()
+        .filter_map(|p| {
+            let meta = fs::metadata(&p).ok()?;
+            let modified = meta.modified().ok()?;
+            Some((p, modified, meta.len()))
+        })
+        .max_by_key(|(_, modified, _)| *modified)
+}
+
+fn read_tail(path: &Path, max_bytes: u64) -> String {
+    let Ok(meta) = fs::metadata(path) else { return String::new(); };
+    let len = meta.len();
+    let start = len.saturating_sub(max_bytes);
+    let Ok(mut file) = fs::File::open(path) else { return String::new(); };
+    use std::io::{Read, Seek, SeekFrom};
+    let _ = file.seek(SeekFrom::Start(start));
+    let mut buf = Vec::new();
+    let _ = file.read_to_end(&mut buf);
+    String::from_utf8_lossy(&buf).to_string()
+}
+
+fn backup_log_error(log_path: &Path, keywords: &[String]) -> Option<String> {
+    let (latest_log, _, _) = latest_matching_file(log_path, "*.log")
+        .or_else(|| latest_matching_file(log_path, "*.txt"))?;
+    let text = read_tail(&latest_log, 200_000).to_lowercase();
+    for kw in keywords {
+        let k = kw.to_lowercase();
+        if !k.trim().is_empty() && text.contains(&k) {
+            return Some(format!("Palavra-chave '{}' encontrada no log {}", kw, latest_log.display()));
+        }
+    }
+    None
+}
+
+fn collect_backup_status(config: &Config) -> Value {
+    let Some(mon) = &config.backup_monitor else {
+        return json!({ "enabled": false, "status": "DISABLED", "label": "Desativado" });
+    };
+    if !mon.enabled {
+        return json!({ "enabled": false, "status": "DISABLED", "label": "Desativado" });
+    }
+
+    let backup_dir = PathBuf::from(&mon.path);
+    let log_dir = PathBuf::from(&mon.log_path);
+    let now = Utc::now();
+
+    if !backup_dir.exists() {
+        return json!({
+            "enabled": true,
+            "status": "FAILED",
+            "label": "Falha",
+            "message": format!("Pasta de backup não encontrada: {}", backup_dir.display()),
+            "path": mon.path,
+            "logPath": mon.log_path,
+            "checkedAt": now.to_rfc3339()
+        });
+    }
+
+    let latest = latest_matching_file(&backup_dir, &mon.file_pattern);
+    let log_error = if log_dir.exists() { backup_log_error(&log_dir, &mon.error_keywords) } else { None };
+
+    let Some((file, modified, size_bytes)) = latest else {
+        return json!({
+            "enabled": true,
+            "status": "FAILED",
+            "label": "Falha",
+            "message": format!("Nenhum arquivo {} encontrado em {}", mon.file_pattern, backup_dir.display()),
+            "path": mon.path,
+            "logPath": mon.log_path,
+            "checkedAt": now.to_rfc3339()
+        });
+    };
+
+    let age_secs = modified.elapsed().unwrap_or_else(|_| Duration::from_secs(0)).as_secs();
+    let age_hours = (age_secs as f64) / 3600.0;
+    let mut status = if age_hours > mon.max_age_hours as f64 { "FAILED" }
+        else if age_hours > mon.warn_age_hours as f64 { "WARNING" }
+        else { "OK" };
+
+    let mut message = if status == "OK" {
+        "Backup atualizado".to_string()
+    } else if status == "WARNING" {
+        format!("Último backup há {:.1}h", age_hours)
+    } else {
+        format!("Backup atrasado: último arquivo há {:.1}h", age_hours)
+    };
+
+    if let Some(err) = log_error {
+        status = "FAILED";
+        message = err;
+    }
+
+    let filename = file.file_name().and_then(|x| x.to_str()).unwrap_or("-").to_string();
+    json!({
+        "enabled": true,
+        "status": status,
+        "label": if status == "OK" { "OK" } else if status == "WARNING" { "Atenção" } else { "Falha" },
+        "message": message,
+        "path": mon.path,
+        "logPath": mon.log_path,
+        "filePattern": mon.file_pattern,
+        "latestFile": filename,
+        "latestFilePath": file.display().to_string(),
+        "latestModifiedAt": system_time_to_iso(modified),
+        "ageHours": (age_hours * 10.0).round() / 10.0,
+        "sizeBytes": size_bytes,
+        "sizeMb": ((size_bytes as f64 / 1024.0 / 1024.0) * 10.0).round() / 10.0,
+        "checkedAt": now.to_rfc3339()
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Fila offline de métricas
 // ---------------------------------------------------------------------------
@@ -663,6 +843,7 @@ async fn run_metrics_loop(config: Arc<Config>) {
         let collected_at = Utc::now().to_rfc3339();
         let cfg_clone = Arc::clone(&config);
         let snapshot = tokio::task::spawn_blocking(move || {
+            let backup_status = collect_backup_status(&cfg_clone);
             match run_sqlplus_metrics(&cfg_clone) {
                 Ok(overview) => json!({
                     "agentId":      cfg_clone.agent_id,
@@ -675,6 +856,7 @@ async fn run_metrics_loop(config: Arc<Config>) {
                         "collectedAt": collected_at,
                         "host":        hostname(),
                         "overview":    overview,
+                        "backupStatus": backup_status,
                         "collector":   "rust-sqlplus"
                     }
                 }),
@@ -689,6 +871,7 @@ async fn run_metrics_loop(config: Arc<Config>) {
                         "collectedAt": collected_at,
                         "host":        hostname(),
                         "message":     err.to_string(),
+                        "backupStatus": backup_status,
                         "collector":   "rust-sqlplus"
                     }
                 }),

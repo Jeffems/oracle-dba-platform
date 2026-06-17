@@ -30,7 +30,7 @@ try { ({ PrismaClient } = require('@prisma/client')); } catch (err) {
 const prisma = new PrismaClient();
 const PORT = Number(process.env.PORT || process.env.RAILWAY_PORT || process.env.CENTRAL_API_PORT || 4090);
 const TOKEN = process.env.CENTRAL_API_TOKEN || 'dev-token-change-me';
-const VERSION = '3.3.6';
+const VERSION = '3.3.7';
 const startedAt = Date.now();
 const sseClients = new Set();
 const LOG_DIR = path.join(process.cwd(), 'logs');
@@ -72,6 +72,25 @@ function metricValue(snapshot, metric) {
   const overview = snapshot?.overview || snapshot?.OVERVIEW || [];
   const found = overview.find(row => String(row.METRIC ?? row.metric ?? '').toUpperCase() === metric);
   return Number(found?.VALUE ?? found?.value ?? 0);
+}
+
+function normalizeBackupStatus(snapshot) {
+  const b = snapshot?.backupStatus || snapshot?.backup || null;
+  if (!b || typeof b !== 'object') return { enabled: false, status: 'UNKNOWN', label: 'Sem dados' };
+  return {
+    enabled: Boolean(b.enabled),
+    status: String(b.status || 'UNKNOWN').toUpperCase(),
+    label: b.label || b.status || 'Sem dados',
+    message: b.message || null,
+    latestFile: b.latestFile || null,
+    latestFilePath: b.latestFilePath || null,
+    latestModifiedAt: b.latestModifiedAt || null,
+    ageHours: Number(b.ageHours ?? 0),
+    sizeMb: Number(b.sizeMb ?? 0),
+    checkedAt: b.checkedAt || null,
+    path: b.path || null,
+    logPath: b.logPath || null
+  };
 }
 function normalizeMetricRecord(row) {
   const snapshot = row.snapshot || {};
@@ -150,6 +169,7 @@ async function summarizeInstances() {
       pendingCommands,
       registered: true,
       latest: snapshot,
+      backupStatus: normalizeBackupStatus(snapshot),
       activeSessions: metricValue(snapshot, 'ACTIVE_SESSIONS'),
       blockedSessions: metricValue(snapshot, 'BLOCKED_SESSIONS'),
       locksWaiting: metricValue(snapshot, 'LOCKS_WAITING'),
@@ -183,6 +203,9 @@ function calcAlerts(instances) {
     if (Number(item.longOps || 0) > 0) alerts.push({ level: 'warning', agentId: item.agentId, message: `${prefix}: ${item.longOps} operações longas em execução.` });
     if (Number(item.maxTablespacePct || 0) >= 90) alerts.push({ level: 'critical', agentId: item.agentId, message: `${prefix}: tablespace acima de 90%.` });
     else if (Number(item.maxTablespacePct || 0) >= 80) alerts.push({ level: 'warning', agentId: item.agentId, message: `${prefix}: tablespace acima de 80%.` });
+    const backup = item.backupStatus || {};
+    if (backup.enabled && backup.status === 'FAILED') alerts.push({ level: 'critical', agentId: item.agentId, message: `${prefix}: backup com falha. ${backup.message || ''}`.trim() });
+    else if (backup.enabled && backup.status === 'WARNING') alerts.push({ level: 'warning', agentId: item.agentId, message: `${prefix}: backup em atenção. ${backup.message || ''}`.trim() });
   }
   return alerts;
 }

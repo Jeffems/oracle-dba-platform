@@ -1,12 +1,12 @@
 {
   "name": "oracle-dba-dashboard-web",
-  "version": "3.3.6",
+  "version": "3.3.7",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 5174",
-    "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0 --port 5174"
+    "dev": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 5174",
+    "build": "node ./node_modules/vite/bin/vite.js build",
+    "preview": "node ./node_modules/vite/bin/vite.js preview --host 0.0.0.0 --port 5174"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",

@@ -13,5 +13,20 @@
     "asSysdba": true,
     "localSysdba": true
   },
-  "logDir": "C:\\ProgramData\\OracleDBAAgent\\logs"
+  "logDir": "C:\\ProgramData\\OracleDBAAgent\\logs",
+  "backupMonitor": {
+    "enabled": true,
+    "path": "D:\\BackupService",
+    "filePattern": "*.zip",
+    "logPath": "D:\\BackupService\\logs",
+    "maxAgeHours": 24,
+    "warnAgeHours": 30,
+    "errorKeywords": [
+      "erro",
+      "error",
+      "failed",
+      "falha",
+      "exception"
+    ]
+  }
 }
