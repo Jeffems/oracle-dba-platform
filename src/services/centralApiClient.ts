@@ -60,75 +60,129 @@ export type CentralCommand = {
 };
 
 const DEFAULT_CONFIG: CentralApiConfig = {
-  apiUrl: import.meta.env.VITE_API_URL || 'http://127.0.0.1:4090',
-  apiToken: import.meta.env.VITE_API_TOKEN || 'dev-token-change-me'
+  apiUrl: import.meta.env.VITE_API_URL || "http://127.0.0.1:4090",
+  apiToken: import.meta.env.VITE_API_TOKEN || "dev-token-change-me",
 };
 
 export function loadCentralApiConfig(): CentralApiConfig {
   return {
-    apiUrl: localStorage.getItem('desktopCentralApiUrl') || DEFAULT_CONFIG.apiUrl,
-    apiToken: localStorage.getItem('desktopCentralApiToken') || DEFAULT_CONFIG.apiToken
+    apiUrl:
+      localStorage.getItem("desktopCentralApiUrl") || DEFAULT_CONFIG.apiUrl,
+    apiToken:
+      localStorage.getItem("desktopCentralApiToken") || DEFAULT_CONFIG.apiToken,
   };
 }
 
 export function saveCentralApiConfig(config: CentralApiConfig) {
-  localStorage.setItem('desktopCentralApiUrl', config.apiUrl.trim().replace(/\/$/, ''));
-  localStorage.setItem('desktopCentralApiToken', config.apiToken.trim());
+  localStorage.setItem(
+    "desktopCentralApiUrl",
+    config.apiUrl.trim().replace(/\/$/, ""),
+  );
+  localStorage.setItem("desktopCentralApiToken", config.apiToken.trim());
 }
 
 function cleanUrl(config: CentralApiConfig) {
-  return config.apiUrl.trim().replace(/\/$/, '');
+  return config.apiUrl.trim().replace(/\/$/, "");
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
   let body: any = null;
-  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = text;
+  }
   if (!response.ok) {
-    const msg = body?.message || body?.error || text || `HTTP ${response.status}`;
+    const msg =
+      body?.message || body?.error || text || `HTTP ${response.status}`;
     throw new Error(msg);
   }
   return body as T;
 }
 
-export async function centralFetch<T>(config: CentralApiConfig, path: string, init: RequestInit = {}): Promise<T> {
+export async function centralFetch<T>(
+  config: CentralApiConfig,
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
   const headers = new Headers(init.headers || {});
-  if (config.apiToken) headers.set('Authorization', `Bearer ${config.apiToken}`);
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  const response = await fetch(`${cleanUrl(config)}${path}`, { ...init, headers });
+  if (config.apiToken)
+    headers.set("Authorization", `Bearer ${config.apiToken}`);
+  if (init.body && !headers.has("Content-Type"))
+    headers.set("Content-Type", "application/json");
+  const response = await fetch(`${cleanUrl(config)}${path}`, {
+    ...init,
+    headers,
+  });
   return parseResponse<T>(response);
 }
 
 export async function getCentralHealth(config: CentralApiConfig) {
-  return centralFetch<any>(config, '/health');
+  return centralFetch<any>(config, "/health");
 }
 
 export async function getCentralClients(config: CentralApiConfig) {
-  return centralFetch<{ ok: boolean; rows: CentralClient[] }>(config, '/api/clients');
+  return centralFetch<{ ok: boolean; rows: CentralClient[] }>(
+    config,
+    "/api/clients",
+  );
 }
 
-export async function getCentralMetrics(config: CentralApiConfig, agentId?: string, limit = 200) {
+export async function getCentralMetrics(
+  config: CentralApiConfig,
+  agentId?: string,
+  limit = 200,
+) {
   const query = new URLSearchParams({ limit: String(limit) });
-  if (agentId) query.set('agentId', agentId);
-  return centralFetch<{ ok: boolean; rows: CentralMetric[] }>(config, `/api/metrics?${query.toString()}`);
+  if (agentId) query.set("agentId", agentId);
+  return centralFetch<{ ok: boolean; rows: CentralMetric[] }>(
+    config,
+    `/api/metrics?${query.toString()}`,
+  );
 }
 
-export async function getCentralCommands(config: CentralApiConfig, agentId?: string) {
-  const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
-  return centralFetch<{ ok: boolean; rows: CentralCommand[] }>(config, `/api/scripts${query}`);
+export async function getCentralCommands(
+  config: CentralApiConfig,
+  agentId?: string,
+) {
+  const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : "";
+  return centralFetch<{ ok: boolean; rows: CentralCommand[] }>(
+    config,
+    `/api/scripts${query}`,
+  );
 }
 
-export async function queueCentralScript(config: CentralApiConfig, payload: { agentId: string; sql: string; allowDangerous: boolean; note?: string }) {
-  return centralFetch<{ ok: boolean; blocked?: boolean; message?: string; command?: CentralCommand }>(config, '/api/scripts/queue', {
-    method: 'POST',
-    body: JSON.stringify({ ...payload, type: 'SQL_SCRIPT' })
+export async function queueCentralScript(
+  config: CentralApiConfig,
+  payload: {
+    agentId: string;
+    sql: string;
+    allowDangerous: boolean;
+    note?: string;
+  },
+) {
+  return centralFetch<{
+    ok: boolean;
+    blocked?: boolean;
+    message?: string;
+    command?: CentralCommand;
+  }>(config, "/api/scripts/queue", {
+    method: "POST",
+    body: JSON.stringify({ ...payload, type: "SQL_SCRIPT" }),
   });
 }
 
-
-export async function clearCentralCommandHistory(config: CentralApiConfig, agentId?: string) {
-  const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
-  return centralFetch<{ ok: boolean; deleted: number; message?: string }>(config, `/api/scripts/history${query}`, {
-    method: 'DELETE'
-  });
+export async function clearCentralCommandHistory(
+  config: CentralApiConfig,
+  agentId?: string,
+) {
+  const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : "";
+  return centralFetch<{ ok: boolean; deleted: number; message?: string }>(
+    config,
+    `/api/scripts/history${query}`,
+    {
+      method: "DELETE",
+    },
+  );
 }
