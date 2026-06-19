@@ -430,9 +430,9 @@ function App() {
   return <main className={viewMode === 'list' ? 'list-mode' : ''}>
     <header className="hero noc-hero">
       <div>
-        <p className="eyebrow">Oracle DBA Platform • NOC View</p>
+        <p className="eyebrow">Estatísticas Oracle 19c</p>
         <h1>Dashboard Web v{VERSION}</h1>
-        <p>Visualização operacional estilo Grafana para Agents, Oracle, locks, sessões, tablespaces e comandos remotos.</p>
+        <p>Projeto em desenvolvimento</p>
       </div>
       <div className="hero-actions"><Pill tone={health?.ok ? 'ok' : 'danger'}>{health?.ok ? 'API online' : 'API offline'}</Pill><Pill tone={realtime ? 'ok' : 'warn'}>{realtime ? 'Realtime ON' : 'Realtime OFF'}</Pill><button onClick={load} disabled={loading}><RefreshCcw size={18} className={loading ? 'spin' : ''}/> Atualizar</button></div>
     </header>
