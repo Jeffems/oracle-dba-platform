@@ -30,7 +30,7 @@ try { ({ PrismaClient } = require('@prisma/client')); } catch (err) {
 const prisma = new PrismaClient();
 const PORT = Number(process.env.PORT || process.env.RAILWAY_PORT || process.env.CENTRAL_API_PORT || 4090);
 const TOKEN = process.env.CENTRAL_API_TOKEN || 'dev-token-change-me';
-const VERSION = '3.3.7';
+const VERSION = '3.3.8';
 const startedAt = Date.now();
 const sseClients = new Set();
 const LOG_DIR = path.join(process.cwd(), 'logs');
@@ -72,6 +72,24 @@ function metricValue(snapshot, metric) {
   const overview = snapshot?.overview || snapshot?.OVERVIEW || [];
   const found = overview.find(row => String(row.METRIC ?? row.metric ?? '').toUpperCase() === metric);
   return Number(found?.VALUE ?? found?.value ?? 0);
+}
+function positiveDelta(current, previous) {
+  const c = Number(current || 0);
+  const p = Number(previous || 0);
+  if (!Number.isFinite(c) || !Number.isFinite(p)) return 0;
+  const d = c - p;
+  // Contadores Oracle zeram no restart. Se o atual for menor que o anterior, não mostra delta negativo.
+  return d >= 0 ? d : 0;
+}
+function secondsBetween(a, b) {
+  const ta = new Date(a || 0).getTime();
+  const tb = new Date(b || 0).getTime();
+  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return 0;
+  return Math.max(0, (ta - tb) / 1000);
+}
+function round2(v) {
+  const n = Number(v || 0);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
 }
 
 function normalizeBackupStatus(snapshot) {
@@ -153,10 +171,28 @@ async function summarizeInstances() {
   const agents = await prisma.agent.findMany({ orderBy: [{ lastSeenAt: 'desc' }, { updatedAt: 'desc' }] });
   const rows = [];
   for (const agent of agents) {
-    const latest = await prisma.metric.findFirst({ where: { agentId: agent.agentId }, orderBy: { receivedAt: 'desc' } });
+    const recentMetrics = await prisma.metric.findMany({ where: { agentId: agent.agentId }, orderBy: { receivedAt: 'desc' }, take: 2 });
+    const latest = recentMetrics[0] || null;
+    const previous = recentMetrics[1] || null;
     const samples = await prisma.metric.count({ where: { agentId: agent.agentId } });
     const pendingCommands = await prisma.command.count({ where: { agentId: agent.agentId, status: { in: ['QUEUED', 'IN_PROGRESS'] } } });
     const snapshot = latest?.snapshot || null;
+    const previousSnapshot = previous?.snapshot || null;
+    const elapsedSeconds = secondsBetween(latest?.receivedAt, previous?.receivedAt);
+
+    // Estas métricas do Oracle são contadores acumulados desde o STARTUP do banco.
+    // Para dashboard/NOC, o correto é mostrar o delta entre a última coleta e a anterior.
+    const dbTimeTotalSeconds = metricValue(snapshot, 'DB_TIME_SECONDS');
+    const previousDbTimeTotalSeconds = metricValue(previousSnapshot, 'DB_TIME_SECONDS');
+    const dbCpuTotalSeconds = metricValue(snapshot, 'DB_CPU_SECONDS');
+    const previousDbCpuTotalSeconds = metricValue(previousSnapshot, 'DB_CPU_SECONDS');
+    const redoTotalMb = metricValue(snapshot, 'REDO_SIZE_MB');
+    const previousRedoTotalMb = metricValue(previousSnapshot, 'REDO_SIZE_MB');
+
+    const dbTimeDeltaSeconds = previous ? positiveDelta(dbTimeTotalSeconds, previousDbTimeTotalSeconds) : 0;
+    const dbCpuDeltaSeconds = previous ? positiveDelta(dbCpuTotalSeconds, previousDbCpuTotalSeconds) : 0;
+    const redoDeltaMb = previous ? positiveDelta(redoTotalMb, previousRedoTotalMb) : 0;
+
     rows.push({
       agentId: agent.agentId,
       customerName: agent.customerName,
@@ -176,13 +212,21 @@ async function summarizeInstances() {
       invalidObjects: metricValue(snapshot, 'INVALID_OBJECTS'),
       longOps: metricValue(snapshot, 'LONG_OPS'),
       maxTablespacePct: metricValue(snapshot, 'TABLESPACE_MAX_USED_PCT'),
-      dbCpuSeconds: metricValue(snapshot, 'DB_CPU_SECONDS'),
-      dbTimeSeconds: metricValue(snapshot, 'DB_TIME_SECONDS'),
+      // Totais brutos acumulados desde o startup do Oracle. Mantidos para diagnóstico.
+      dbCpuTotalSeconds,
+      dbTimeTotalSeconds,
+      redoTotalMb,
+      // Métricas corretas para visualização: delta da última coleta.
+      metricsElapsedSeconds: round2(elapsedSeconds),
+      dbCpuSeconds: round2(dbCpuDeltaSeconds),
+      dbTimeSeconds: round2(dbTimeDeltaSeconds),
+      dbTimePerSec: elapsedSeconds > 0 ? round2(dbTimeDeltaSeconds / elapsedSeconds) : 0,
+      redoSizeMb: round2(redoDeltaMb),
+      redoMbPerMin: elapsedSeconds > 0 ? round2((redoDeltaMb / elapsedSeconds) * 60) : 0,
       logicalReads: metricValue(snapshot, 'LOGICAL_READS'),
       physicalReads: metricValue(snapshot, 'PHYSICAL_READS'),
       executions: metricValue(snapshot, 'EXECUTIONS'),
       parseCountTotal: metricValue(snapshot, 'PARSE_COUNT_TOTAL'),
-      redoSizeMb: metricValue(snapshot, 'REDO_SIZE_MB'),
       pgaAllocMb: metricValue(snapshot, 'PGA_ALLOC_MB'),
       sgaMb: metricValue(snapshot, 'SGA_MB')
     });
