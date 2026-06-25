@@ -221,12 +221,59 @@ fn is_query_sql(sql: &str) -> bool {
     lower.starts_with("select ") || lower.starts_with("with ")
 }
 
+fn normalize_sql_for_detection(sql: &str) -> String {
+    strip_sql_comments_for_detection(sql)
+        .replace('\r', " ")
+        .replace('\n', " ")
+        .replace('\t', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .trim_matches(';')
+        .to_lowercase()
+}
+
+fn split_sql_statements_for_detection(sql: &str) -> Vec<String> {
+    let cleaned = strip_sql_comments_for_detection(sql);
+    cleaned
+        .split(';')
+        .map(normalize_sql_for_detection)
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn is_sqlplus_directive_for_detection(stmt: &str) -> bool {
+    stmt.starts_with("set ")
+        || stmt.starts_with("whenever ")
+        || stmt.starts_with("alter session ")
+        || stmt.starts_with("prompt ")
+        || stmt.starts_with("spool ")
+        || stmt == "/"
+}
+
+fn is_instance_control_statement(stmt: &str) -> bool {
+    let s = stmt.trim().trim_matches(';').trim();
+    s == "startup"
+        || s.starts_with("startup ")
+        || s == "shutdown"
+        || s.starts_with("shutdown ")
+        || s == "alter database open"
+        || s.starts_with("alter database open ")
+        || s == "alter database mount"
+        || s.starts_with("alter database mount ")
+}
+
 fn is_instance_control_sql(sql: &str) -> bool {
-    let lower = strip_sql_comments_for_detection(sql).trim_start().to_lowercase();
-    lower.starts_with("startup")
-        || lower.starts_with("shutdown")
-        || lower.contains(" startup")
-        || lower.contains(" shutdown")
+    let statements = split_sql_statements_for_detection(sql);
+    if statements.is_empty() {
+        return false;
+    }
+
+    statements
+        .iter()
+        .filter(|stmt| !is_sqlplus_directive_for_detection(stmt))
+        .any(|stmt| is_instance_control_statement(stmt))
 }
 
 fn sqlplus_args_for_sql(config: &Config, sql: &str) -> Vec<String> {
