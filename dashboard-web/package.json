@@ -1,6 +1,6 @@
 {
   "name": "oracle-dba-dashboard-web",
-  "version": "3.3.7",
+  "version": "3.3.9",
   "private": true,
   "type": "module",
   "scripts": {
