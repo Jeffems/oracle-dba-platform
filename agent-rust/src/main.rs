@@ -165,12 +165,16 @@ fn hostname() -> String {
         .unwrap_or_else(|_| "unknown-host".to_string())
 }
 
-fn sqlplus_connect_string(oracle: &OracleConfig) -> String {
+fn sqlplus_logon_args(oracle: &OracleConfig) -> Vec<String> {
+    // IMPORTANTE: quando chamamos SQLPlus via std::process::Command, não existe shell
+    // para quebrar `as sysdba` em argumentos. Por isso, NÃO envie
+    // "usuario/senha@banco as sysdba" como um único argumento.
+    // Envie como: ["usuario/senha@banco", "as", "sysdba"].
     let base = format!("{}/{}@{}", oracle.user, oracle.password, oracle.connect_string);
     if oracle.as_sysdba {
-        format!("{} as sysdba", base)
+        vec![base, "as".to_string(), "sysdba".to_string()]
     } else {
-        base
+        vec![base]
     }
 }
 
@@ -221,67 +225,41 @@ fn is_query_sql(sql: &str) -> bool {
     lower.starts_with("select ") || lower.starts_with("with ")
 }
 
-fn normalize_sql_for_detection(sql: &str) -> String {
-    strip_sql_comments_for_detection(sql)
-        .replace('\r', " ")
-        .replace('\n', " ")
-        .replace('\t', " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .trim_matches(';')
-        .to_lowercase()
-}
-
-fn split_sql_statements_for_detection(sql: &str) -> Vec<String> {
-    let cleaned = strip_sql_comments_for_detection(sql);
-    cleaned
-        .split(';')
-        .map(normalize_sql_for_detection)
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-fn is_sqlplus_directive_for_detection(stmt: &str) -> bool {
-    stmt.starts_with("set ")
-        || stmt.starts_with("whenever ")
-        || stmt.starts_with("alter session ")
-        || stmt.starts_with("prompt ")
-        || stmt.starts_with("spool ")
-        || stmt == "/"
-}
-
-fn is_instance_control_statement(stmt: &str) -> bool {
-    let s = stmt.trim().trim_matches(';').trim();
-    s == "startup"
-        || s.starts_with("startup ")
-        || s == "shutdown"
-        || s.starts_with("shutdown ")
-        || s == "alter database open"
-        || s.starts_with("alter database open ")
-        || s == "alter database mount"
-        || s.starts_with("alter database mount ")
-}
-
 fn is_instance_control_sql(sql: &str) -> bool {
-    let statements = split_sql_statements_for_detection(sql);
-    if statements.is_empty() {
-        return false;
-    }
+    let lower = strip_sql_comments_for_detection(sql).trim_start().to_lowercase();
+    lower.starts_with("startup")
+        || lower.starts_with("shutdown")
+        || lower.contains(" startup")
+        || lower.contains(" shutdown")
+        || lower.starts_with("alter database open")
+        || lower.starts_with("alter database mount")
+        || lower.contains(" alter database open")
+        || lower.contains(" alter database mount")
+}
 
-    statements
-        .iter()
-        .filter(|stmt| !is_sqlplus_directive_for_detection(stmt))
-        .any(|stmt| is_instance_control_statement(stmt))
+fn is_sqlplus_startup_shutdown(sql: &str) -> bool {
+    let lower = strip_sql_comments_for_detection(sql).trim_start().to_lowercase();
+    lower.starts_with("startup")
+        || lower.starts_with("shutdown")
+        || lower.contains(" startup")
+        || lower.contains(" shutdown")
 }
 
 fn sqlplus_args_for_sql(config: &Config, sql: &str) -> Vec<String> {
+    let mut args = vec!["-L".to_string(), "-S".to_string()];
+
     if config.oracle.local_sysdba && is_instance_control_sql(sql) {
-        vec!["-S".to_string(), "/".to_string(), "as".to_string(), "sysdba".to_string()]
+        // Controle de instância precisa autenticar localmente, sem listener.
+        // Via Command, os argumentos precisam ser separados:
+        //   sqlplus -L -S / as sysdba
+        args.push("/".to_string());
+        args.push("as".to_string());
+        args.push("sysdba".to_string());
     } else {
-        vec!["-S".to_string(), sqlplus_connect_string(&config.oracle)]
+        args.extend(sqlplus_logon_args(&config.oracle));
     }
+
+    args
 }
 
 /// Filtra ruídos do SQLPlus apenas para uso em mensagens de erro.
@@ -312,10 +290,12 @@ fn sqlplus_ready_sql(sql: &str) -> String {
     }
 
     // STARTUP/SHUTDOWN são comandos do SQLPlus, não SQL comum.
-    // Não adicionar ; porque pode gerar SP2-0306/SP2-0734 dependendo da versão.
-    if is_instance_control_sql(trimmed) {
-        return trimmed.to_string();
+    // Remove ; final porque algumas versões do SQLPlus tratam STARTUP; como comando inválido.
+    if is_sqlplus_startup_shutdown(trimmed) {
+        return trimmed.trim_end_matches(';').trim().to_string();
     }
+
+    // ALTER DATABASE OPEN/MOUNT é SQL comum: precisa de ;.
 
     let last_line = trimmed
         .lines()
@@ -343,11 +323,26 @@ fn execute_sqlplus_script(config: &Config, sql: &str) -> Result<String> {
     //   termout ON (padrão) + sem spool = tudo vai para stdout capturado pelo pipe.
     //
     // Para DDL/DML: serveroutput on, resultado também no stdout.
+    let is_instance_control = config.oracle.local_sysdba && is_instance_control_sql(sql);
+
     let script = if is_query {
         format!(
             "set echo off verify off feedback off tab off\n\
              set pagesize 50000 linesize 32767 trimspool on\n\
              set markup csv on delimiter , quote on\n\
+             whenever sqlerror exit sql.sqlcode\n\
+             {sql}\n\
+             exit\n",
+            sql = sql_for_sqlplus,
+        )
+    } else if is_instance_control {
+        // Para STARTUP/SHUTDOWN/ALTER DATABASE OPEN/MOUNT:
+        // - login é feito pela linha de comando: sqlplus -S "/ as sysdba"
+        // - NÃO inserir CONNECT dentro do script
+        // - NÃO executar COMMIT depois de comandos de instância
+        format!(
+            "set echo off verify off feedback off heading off\n\
+             set pagesize 0 linesize 400 trimspool on serveroutput on\n\
              whenever sqlerror exit sql.sqlcode\n\
              {sql}\n\
              exit\n",
@@ -446,10 +441,12 @@ exit
     fs::write(&sql_file, script)
         .with_context(|| format!("Falha ao criar arquivo SQL de métricas: {}", sql_file.display()))?;
 
+    let mut metrics_args = vec!["-L".to_string(), "-S".to_string()];
+    metrics_args.extend(sqlplus_logon_args(&config.oracle));
+    metrics_args.push(format!("@{}", sql_file.display()));
+
     let output = Command::new(&config.oracle.sqlplus_path)
-        .arg("-S")
-        .arg(sqlplus_connect_string(&config.oracle))
-        .arg(format!("@{}", sql_file.display()))
+        .args(&metrics_args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
