@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const VERSION = "3.3.9";
+const VERSION = "3.3.13";
 const DEFAULT_API_URL =
   localStorage.getItem("centralApiUrl") ||
   import.meta.env.VITE_API_URL ||
@@ -75,6 +75,21 @@ function pctClass(value, warn = 80, danger = 90) {
   if (x >= warn) return "warn";
   return "ok";
 }
+
+function isCriticalSql(sql) {
+  const s = String(sql || "")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--.*$/gm, " ")
+    .toLowerCase();
+  const deleteWithoutWhere = /\bdelete\s+from\b/.test(s) && !/\bwhere\b/.test(s);
+  return (
+    /\b(drop|truncate|shutdown|startup)\b/.test(s) ||
+    /\balter\s+(system|database)\b/.test(s) ||
+    /\bkill\s+session\b/.test(s) ||
+    deleteWithoutWhere
+  );
+}
+
 function statusClass(status) {
   if (status === "SUCCESS") return "ok";
   if (status === "FAILED" || status === "BLOCKED_REVIEW_REQUIRED")
@@ -798,14 +813,44 @@ function App() {
     }
   }
 
+  async function requestCriticalReauth() {
+    const password = window.prompt(
+      "Comando crítico detectado. Informe a senha de segurança para continuar:",
+    );
+    if (!password) return null;
+    const res = await apiFetch("/api/auth/reauth", {
+      method: "POST",
+      body: JSON.stringify({
+        password,
+        reason: "dashboard-web-critical-command",
+      }),
+    });
+    const body = await res.json();
+    if (!res.ok || !body.ok)
+      throw new Error(body.message || "Falha na reautenticação.");
+    return body.reauthToken;
+  }
+
   async function queueScript() {
     if (!selectedAgent)
       return setMessage("Selecione um Agent antes de enfileirar script.");
     if (!sql.trim()) return setMessage("Informe um SQL/script.");
     setLoading(true);
     try {
+      const critical = isCriticalSql(sql);
+      let reauthToken = null;
+      if (critical) {
+        if (!allowDangerous) {
+          throw new Error(
+            "Comando crítico detectado. Marque a liberação e faça login de segurança.",
+          );
+        }
+        reauthToken = await requestCriticalReauth();
+        if (!reauthToken) throw new Error("Execução cancelada pelo usuário.");
+      }
       const res = await apiFetch("/api/scripts/queue", {
         method: "POST",
+        headers: reauthToken ? { "X-Reauth-Token": reauthToken } : {},
         body: JSON.stringify({
           agentId: selectedAgent,
           sql,

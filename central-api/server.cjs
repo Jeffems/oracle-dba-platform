@@ -46,12 +46,48 @@ const PORT = Number(
     4090,
 );
 const TOKEN = process.env.CENTRAL_API_TOKEN || "dev-token-change-me";
-const VERSION = "3.3.10";
+const VERSION = "3.3.13";
 const startedAt = Date.now();
 const sseClients = new Set();
 const LOG_DIR = path.join(process.cwd(), "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true });
 const LOG_FILE = path.join(LOG_DIR, "central-api.log");
+
+const REAUTH_PASSWORD =
+  process.env.CENTRAL_REAUTH_PASSWORD ||
+  process.env.CENTRAL_ADMIN_PASSWORD ||
+  process.env.ADMIN_PASSWORD ||
+  "admin-change-me";
+const REAUTH_TTL_MS = Number(process.env.REAUTH_TTL_MS || 5 * 60 * 1000);
+const reauthSessions = new Map();
+
+function safeEqual(a, b) {
+  const aa = Buffer.from(String(a || ""));
+  const bb = Buffer.from(String(b || ""));
+  return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
+}
+function issueReauthToken(meta = {}) {
+  const token = crypto.randomBytes(32).toString("hex");
+  const expiresAt = Date.now() + REAUTH_TTL_MS;
+  reauthSessions.set(token, { expiresAt, meta });
+  return { token, expiresAt: new Date(expiresAt).toISOString() };
+}
+function consumeValidReauthToken(req) {
+  const token = String(req.headers["x-reauth-token"] || "").trim();
+  if (!token) return false;
+  const session = reauthSessions.get(token);
+  if (!session) return false;
+  reauthSessions.delete(token);
+  return Date.now() <= session.expiresAt;
+}
+function cleanupReauthSessions() {
+  const now = Date.now();
+  for (const [token, session] of reauthSessions.entries()) {
+    if (now > session.expiresAt) reauthSessions.delete(token);
+  }
+}
+setInterval(cleanupReauthSessions, 60000).unref?.();
+
 
 function log(level, message, meta = {}) {
   const row = { at: new Date().toISOString(), level, message, ...meta };
@@ -74,7 +110,7 @@ function setCors(req, res) {
   res.setHeader("Vary", "Origin");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, Cache-Control",
+    "Content-Type, Authorization, Cache-Control, X-Reauth-Token",
   );
   res.setHeader(
     "Access-Control-Allow-Methods",
@@ -449,10 +485,20 @@ async function dbHealth() {
     return { ok: false, message: err.message };
   }
 }
+function stripSqlComments(sql) {
+  return String(sql || "")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--.*$/gm, " ")
+    .toLowerCase();
+}
 function isDangerousSql(sql) {
-  const s = String(sql || "").toLowerCase();
-  return /\b(drop|truncate|shutdown|startup|alter\s+system|alter\s+database|delete\s+from|update\s+\w+\s+set)\b/.test(
-    s,
+  const s = stripSqlComments(sql);
+  const hasDeleteWithoutWhere = /\bdelete\s+from\b/.test(s) && !/\bwhere\b/.test(s);
+  return (
+    /\b(drop|truncate|shutdown|startup)\b/.test(s) ||
+    /\balter\s+(system|database)\b/.test(s) ||
+    /\bkill\s+session\b/.test(s) ||
+    hasDeleteWithoutWhere
   );
 }
 
@@ -483,6 +529,26 @@ const server = http.createServer(async (req, res) => {
         ok: false,
         message: "Token inválido ou ausente.",
       });
+    if (req.method === "POST" && pathname === "/api/auth/reauth") {
+      const body = await readJson(req);
+      const password = String(body.password || "");
+      const reason = String(body.reason || "critical-command").slice(0, 120);
+      if (!safeEqual(password, REAUTH_PASSWORD)) {
+        await audit("auth.reauth.failed", { reason, requestId });
+        return send(res, 401, {
+          ok: false,
+          message: "Login/senha de segurança inválido.",
+        });
+      }
+      const issued = issueReauthToken({ reason, requestId });
+      await audit("auth.reauth.success", { reason, requestId, expiresAt: issued.expiresAt });
+      return send(res, 200, {
+        ok: true,
+        reauthToken: issued.token,
+        expiresAt: issued.expiresAt,
+        ttlSeconds: Math.floor(REAUTH_TTL_MS / 1000),
+      });
+    }
     if (req.method === "GET" && pathname === "/api/realtime") {
       res.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
@@ -638,11 +704,11 @@ const server = http.createServer(async (req, res) => {
       if (!sql)
         return send(res, 400, { ok: false, message: "Informe o SQL/script." });
       const dangerous = isDangerousSql(sql);
-      const status =
-        dangerous && !allowDangerous ? "BLOCKED_REVIEW_REQUIRED" : "QUEUED";
+      const reauthOk = !dangerous || (allowDangerous && consumeValidReauthToken(req));
+      const status = dangerous && !reauthOk ? "BLOCKED_REVIEW_REQUIRED" : "QUEUED";
       const note =
-        dangerous && !allowDangerous
-          ? "Script bloqueado por conter comando sensível. Marque liberação de comandos críticos para enfileirar."
+        dangerous && !reauthOk
+          ? "Script bloqueado por conter comando crítico. Faça login de segurança novamente antes de enfileirar."
           : body.note || "Script enfileirado para execução pelo Agent.";
       const command = await prisma.command.create({
         data: {
@@ -650,7 +716,7 @@ const server = http.createServer(async (req, res) => {
           type: body.type || "SQL_SCRIPT",
           sql,
           status,
-          allowDangerous,
+          allowDangerous: dangerous ? reauthOk : allowDangerous,
           note,
         },
       });
