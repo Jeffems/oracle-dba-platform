@@ -915,7 +915,7 @@ function App() {
     } catch (err) {
       setMessage(err?.message || String(err));
     } finally {
-      setLoading(false);
+      setScriptLoading(false);
     }
   }
 
