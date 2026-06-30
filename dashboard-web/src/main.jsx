@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const VERSION = "3.3.14";
+const VERSION = "3.3.15";
 const DEFAULT_API_URL =
   localStorage.getItem("centralApiUrl") ||
   import.meta.env.VITE_API_URL ||
@@ -693,10 +693,14 @@ function App() {
     () => alerts.filter((a) => a.level === "critical").length,
     [alerts],
   );
+  const effectiveAgentId = useMemo(
+    () => selectedAgent || clients[0]?.agentId || "",
+    [clients, selectedAgent],
+  );
   const selected = useMemo(
     () =>
-      clients.find((c) => c.agentId === selectedAgent) || clients[0] || null,
-    [clients, selectedAgent],
+      clients.find((c) => c.agentId === effectiveAgentId) || clients[0] || null,
+    [clients, effectiveAgentId],
   );
   const selectedMetrics = useMemo(
     () =>
@@ -829,8 +833,10 @@ function App() {
       setAlertHistory((await ah.json()).rows || []);
       setMetrics((await m.json()).rows || []);
       setCommands((await s.json()).rows || []);
-      if (!selectedAgent && clientsRows[0]?.agentId)
-        setSelectedAgent(clientsRows[0].agentId);
+      setSelectedAgent((prev) => {
+        if (prev && clientsRows.some((c) => c.agentId === prev)) return prev;
+        return clientsRows[0]?.agentId || "";
+      });
       setMessage("Dados atualizados com sucesso.");
     } catch (err) {
       setMessage(err?.message || String(err));
@@ -889,7 +895,8 @@ function App() {
   }
 
   async function queueScript() {
-    if (!selectedAgent)
+    const agentIdToQueue = effectiveAgentId;
+    if (!agentIdToQueue)
       return setMessage("Selecione um Agent antes de enfileirar script.");
     if (!sql.trim()) return setMessage("Informe um SQL/script.");
     setScriptLoading(true);
@@ -897,7 +904,7 @@ function App() {
       const res = await apiFetch("/api/scripts/queue", {
         method: "POST",
         body: JSON.stringify({
-          agentId: selectedAgent,
+          agentId: agentIdToQueue,
           sql,
           allowDangerous,
           type: "SQL_SCRIPT",
@@ -1283,7 +1290,7 @@ function App() {
           <label className="field">
             Agent
             <select
-              value={selectedAgent}
+              value={effectiveAgentId}
               onChange={(e) => setSelectedAgent(e.target.value)}
             >
               {clients.map((c) => (
@@ -1309,7 +1316,7 @@ function App() {
             />{" "}
             Liberar comandos críticos nesta execução
           </label>
-          <button onClick={queueScript} disabled={scriptLoading || !selectedAgent || !sql.trim()}>
+          <button onClick={queueScript} disabled={scriptLoading || !effectiveAgentId || !sql.trim()}>
             <Play size={18} /> {scriptLoading ? "Enfileirando..." : "Enfileirar execução"}
           </button>
         </div>
