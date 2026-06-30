@@ -673,6 +673,7 @@ function App() {
   const [allowDangerous, setAllowDangerous] = useState(false);
   const [message, setMessage] = useState(`Dashboard Web v${VERSION} pronto.`);
   const [loading, setLoading] = useState(false);
+  const [scriptLoading, setScriptLoading] = useState(false);
   const [realtime, setRealtime] = useState(false);
   const [viewMode, setViewMode] = useState(
     localStorage.getItem("dashboardWebViewMode") || "cards",
@@ -891,7 +892,7 @@ function App() {
     if (!selectedAgent)
       return setMessage("Selecione um Agent antes de enfileirar script.");
     if (!sql.trim()) return setMessage("Informe um SQL/script.");
-    setLoading(true);
+    setScriptLoading(true);
     try {
       const res = await apiFetch("/api/scripts/queue", {
         method: "POST",
@@ -1308,8 +1309,8 @@ function App() {
             />{" "}
             Liberar comandos críticos nesta execução
           </label>
-          <button onClick={queueScript} disabled={loading || !selectedAgent}>
-            <Play size={18} /> Enfileirar execução
+          <button onClick={queueScript} disabled={scriptLoading || !selectedAgent || !sql.trim()}>
+            <Play size={18} /> {scriptLoading ? "Enfileirando..." : "Enfileirar execução"}
           </button>
         </div>
         <div className="panel">
