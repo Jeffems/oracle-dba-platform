@@ -1654,9 +1654,7 @@ main {
 .login-card input:focus {
   
   background: rgba(2, 6, 23, 0.98);
-  box-shadow:
-    0 0 0 3px rgba(34, 211, 238, 0.16),
-    0 0 22px rgba(34, 211, 238, 0.08);
+ 
 }
 
 .login-card button {
