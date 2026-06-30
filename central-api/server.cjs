@@ -46,48 +46,21 @@ const PORT = Number(
     4090,
 );
 const TOKEN = process.env.CENTRAL_API_TOKEN || "dev-token-change-me";
-const VERSION = "3.3.13";
+const DASHBOARD_USER = process.env.DASHBOARD_ADMIN_USER || "admin";
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_ADMIN_PASSWORD || "admin123";
+const DASHBOARD_SESSION_SECRET =
+  process.env.DASHBOARD_SESSION_SECRET || TOKEN || "dev-dashboard-secret";
+const DASHBOARD_SESSION_TTL_MS = Math.max(
+  60_000,
+  Number(process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000),
+);
+const dashboardSessions = new Map();
+const VERSION = "3.3.14";
 const startedAt = Date.now();
 const sseClients = new Set();
 const LOG_DIR = path.join(process.cwd(), "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true });
 const LOG_FILE = path.join(LOG_DIR, "central-api.log");
-
-const REAUTH_PASSWORD =
-  process.env.CENTRAL_REAUTH_PASSWORD ||
-  process.env.CENTRAL_ADMIN_PASSWORD ||
-  process.env.ADMIN_PASSWORD ||
-  "admin-change-me";
-const REAUTH_TTL_MS = Number(process.env.REAUTH_TTL_MS || 5 * 60 * 1000);
-const reauthSessions = new Map();
-
-function safeEqual(a, b) {
-  const aa = Buffer.from(String(a || ""));
-  const bb = Buffer.from(String(b || ""));
-  return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
-}
-function issueReauthToken(meta = {}) {
-  const token = crypto.randomBytes(32).toString("hex");
-  const expiresAt = Date.now() + REAUTH_TTL_MS;
-  reauthSessions.set(token, { expiresAt, meta });
-  return { token, expiresAt: new Date(expiresAt).toISOString() };
-}
-function consumeValidReauthToken(req) {
-  const token = String(req.headers["x-reauth-token"] || "").trim();
-  if (!token) return false;
-  const session = reauthSessions.get(token);
-  if (!session) return false;
-  reauthSessions.delete(token);
-  return Date.now() <= session.expiresAt;
-}
-function cleanupReauthSessions() {
-  const now = Date.now();
-  for (const [token, session] of reauthSessions.entries()) {
-    if (now > session.expiresAt) reauthSessions.delete(token);
-  }
-}
-setInterval(cleanupReauthSessions, 60000).unref?.();
-
 
 function log(level, message, meta = {}) {
   const row = { at: new Date().toISOString(), level, message, ...meta };
@@ -110,7 +83,7 @@ function setCors(req, res) {
   res.setHeader("Vary", "Origin");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, Cache-Control, X-Reauth-Token",
+    "Content-Type, Authorization, Cache-Control",
   );
   res.setHeader(
     "Access-Control-Allow-Methods",
@@ -137,8 +110,54 @@ function getBearer(req) {
     return "";
   }
 }
+function safeEqual(a, b) {
+  const ab = Buffer.from(String(a || ""));
+  const bb = Buffer.from(String(b || ""));
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+function signSessionPayload(payload) {
+  return crypto
+    .createHmac("sha256", DASHBOARD_SESSION_SECRET)
+    .update(payload)
+    .digest("base64url");
+}
+function createDashboardSession(username) {
+  const now = Date.now();
+  const session = {
+    sid: crypto.randomUUID(),
+    username,
+    createdAt: now,
+    expiresAt: now + DASHBOARD_SESSION_TTL_MS,
+  };
+  dashboardSessions.set(session.sid, session);
+  const payload = Buffer.from(JSON.stringify(session)).toString("base64url");
+  return `${payload}.${signSessionPayload(payload)}`;
+}
+function verifyDashboardSession(token) {
+  try {
+    const [payload, signature] = String(token || "").split(".");
+    if (!payload || !signature) return null;
+    if (!safeEqual(signature, signSessionPayload(payload))) return null;
+    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!session?.sid || !session?.username || !session?.expiresAt) return null;
+    if (Date.now() > Number(session.expiresAt)) {
+      dashboardSessions.delete(session.sid);
+      return null;
+    }
+    const active = dashboardSessions.get(session.sid);
+    if (active && Number(active.expiresAt) !== Number(session.expiresAt)) return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
 function auth(req) {
-  return getBearer(req) === TOKEN;
+  const bearer = getBearer(req);
+  if (safeEqual(bearer, TOKEN)) return { type: "api-token", username: "agent-or-api" };
+  const session = verifyDashboardSession(bearer);
+  if (session) return { type: "dashboard", username: session.username };
+  return null;
 }
 function readJson(req) {
   return new Promise((resolve, reject) => {
@@ -485,20 +504,10 @@ async function dbHealth() {
     return { ok: false, message: err.message };
   }
 }
-function stripSqlComments(sql) {
-  return String(sql || "")
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--.*$/gm, " ")
-    .toLowerCase();
-}
 function isDangerousSql(sql) {
-  const s = stripSqlComments(sql);
-  const hasDeleteWithoutWhere = /\bdelete\s+from\b/.test(s) && !/\bwhere\b/.test(s);
-  return (
-    /\b(drop|truncate|shutdown|startup)\b/.test(s) ||
-    /\balter\s+(system|database)\b/.test(s) ||
-    /\bkill\s+session\b/.test(s) ||
-    hasDeleteWithoutWhere
+  const s = String(sql || "").toLowerCase();
+  return /\b(drop|truncate|shutdown|startup|alter\s+system|alter\s+database|delete\s+from|update\s+\w+\s+set)\b/.test(
+    s,
   );
 }
 
@@ -524,29 +533,40 @@ const server = http.createServer(async (req, res) => {
         now: new Date().toISOString(),
       });
     }
-    if (pathname.startsWith("/api/") && !auth(req))
-      return send(res, 401, {
-        ok: false,
-        message: "Token inválido ou ausente.",
-      });
-    if (req.method === "POST" && pathname === "/api/auth/reauth") {
+    if (req.method === "POST" && pathname === "/api/auth/login") {
       const body = await readJson(req);
+      const username = String(body.username || "").trim();
       const password = String(body.password || "");
-      const reason = String(body.reason || "critical-command").slice(0, 120);
-      if (!safeEqual(password, REAUTH_PASSWORD)) {
-        await audit("auth.reauth.failed", { reason, requestId });
-        return send(res, 401, {
-          ok: false,
-          message: "Login/senha de segurança inválido.",
-        });
+      if (!username || !password)
+        return send(res, 400, { ok: false, message: "Informe usuário e senha." });
+      if (!safeEqual(username, DASHBOARD_USER) || !safeEqual(password, DASHBOARD_PASSWORD)) {
+        await audit("auth.login.failed", { username, ip: req.socket?.remoteAddress || null });
+        return send(res, 401, { ok: false, message: "Usuário ou senha inválidos." });
       }
-      const issued = issueReauthToken({ reason, requestId });
-      await audit("auth.reauth.success", { reason, requestId, expiresAt: issued.expiresAt });
+      const token = createDashboardSession(username);
+      await audit("auth.login.success", { username, ip: req.socket?.remoteAddress || null });
       return send(res, 200, {
         ok: true,
-        reauthToken: issued.token,
-        expiresAt: issued.expiresAt,
-        ttlSeconds: Math.floor(REAUTH_TTL_MS / 1000),
+        token,
+        user: { username },
+        expiresInMs: DASHBOARD_SESSION_TTL_MS,
+      });
+    }
+    if (req.method === "POST" && pathname === "/api/auth/logout") {
+      const session = verifyDashboardSession(getBearer(req));
+      if (session?.sid) dashboardSessions.delete(session.sid);
+      return send(res, 200, { ok: true, message: "Sessão encerrada." });
+    }
+    const authUser = pathname.startsWith("/api/") ? auth(req) : null;
+    if (pathname.startsWith("/api/") && !authUser)
+      return send(res, 401, {
+        ok: false,
+        message: "Login necessário ou sessão expirada.",
+      });
+    if (req.method === "GET" && pathname === "/api/auth/me") {
+      return send(res, 200, {
+        ok: true,
+        user: { username: authUser.username, type: authUser.type },
       });
     }
     if (req.method === "GET" && pathname === "/api/realtime") {
@@ -704,11 +724,11 @@ const server = http.createServer(async (req, res) => {
       if (!sql)
         return send(res, 400, { ok: false, message: "Informe o SQL/script." });
       const dangerous = isDangerousSql(sql);
-      const reauthOk = !dangerous || (allowDangerous && consumeValidReauthToken(req));
-      const status = dangerous && !reauthOk ? "BLOCKED_REVIEW_REQUIRED" : "QUEUED";
+      const status =
+        dangerous && !allowDangerous ? "BLOCKED_REVIEW_REQUIRED" : "QUEUED";
       const note =
-        dangerous && !reauthOk
-          ? "Script bloqueado por conter comando crítico. Faça login de segurança novamente antes de enfileirar."
+        dangerous && !allowDangerous
+          ? "Script bloqueado por conter comando sensível. Marque liberação de comandos críticos para enfileirar."
           : body.note || "Script enfileirado para execução pelo Agent.";
       const command = await prisma.command.create({
         data: {
@@ -716,7 +736,7 @@ const server = http.createServer(async (req, res) => {
           type: body.type || "SQL_SCRIPT",
           sql,
           status,
-          allowDangerous: dangerous ? reauthOk : allowDangerous,
+          allowDangerous,
           note,
         },
       });

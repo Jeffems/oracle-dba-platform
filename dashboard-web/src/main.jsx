@@ -25,15 +25,12 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const VERSION = "3.3.13";
+const VERSION = "3.3.14";
 const DEFAULT_API_URL =
   localStorage.getItem("centralApiUrl") ||
   import.meta.env.VITE_API_URL ||
   "http://127.0.0.1:4090";
-const DEFAULT_TOKEN =
-  localStorage.getItem("centralApiToken") ||
-  import.meta.env.VITE_API_TOKEN ||
-  "dev-token-change-me";
+const DEFAULT_TOKEN = localStorage.getItem("dashboardAuthToken") || "";
 
 function fmtDate(value) {
   if (!value) return "-";
@@ -75,21 +72,6 @@ function pctClass(value, warn = 80, danger = 90) {
   if (x >= warn) return "warn";
   return "ok";
 }
-
-function isCriticalSql(sql) {
-  const s = String(sql || "")
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--.*$/gm, " ")
-    .toLowerCase();
-  const deleteWithoutWhere = /\bdelete\s+from\b/.test(s) && !/\bwhere\b/.test(s);
-  return (
-    /\b(drop|truncate|shutdown|startup)\b/.test(s) ||
-    /\balter\s+(system|database)\b/.test(s) ||
-    /\bkill\s+session\b/.test(s) ||
-    deleteWithoutWhere
-  );
-}
-
 function statusClass(status) {
   if (status === "SUCCESS") return "ok";
   if (status === "FAILED" || status === "BLOCKED_REVIEW_REQUIRED")
@@ -621,9 +603,63 @@ function ClientListView({
   );
 }
 
+function LoginScreen({ apiUrl, setApiUrl, onLogin, message, loading }) {
+  const [username, setUsername] = useState(localStorage.getItem("dashboardUser") || "admin");
+  const [password, setPassword] = useState("");
+  return (
+    <main className="login-page">
+      <section className="login-card glass">
+        <div className="login-brand">
+          <ShieldCheck size={34} />
+          <div>
+            <p className="eyebrow">Oracle DBA Platform</p>
+            <h1>Login do Dashboard</h1>
+            <p>Acesse o monitoramento web usando o usuário da Central API.</p>
+          </div>
+        </div>
+        <label>
+          URL da API Central
+          <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} />
+        </label>
+        <label>
+          Usuário
+          <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
+        </label>
+        <label>
+          Senha
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onLogin(username, password);
+            }}
+          />
+        </label>
+        <button disabled={loading} onClick={() => onLogin(username, password)}>
+          <Lock size={18} /> Entrar
+        </button>
+        <div className="status"><strong>Status:</strong> {message}</div>
+        <small className="login-help">
+          Configure no Railway/Central API: DASHBOARD_ADMIN_USER e DASHBOARD_ADMIN_PASSWORD.
+        </small>
+      </section>
+    </main>
+  );
+}
+
 function App() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
   const [token, setToken] = useState(DEFAULT_TOKEN);
+  const [authUser, setAuthUser] = useState(() => {
+    const raw = localStorage.getItem("dashboardAuthUser");
+    try {
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
   const [health, setHealth] = useState(null);
   const [clients, setClients] = useState([]);
   const [alerts, setAlerts] = useState([]);
@@ -716,6 +752,45 @@ function App() {
     [selectedMetrics],
   );
 
+  async function login(username, password) {
+    const cleanApiUrl = apiUrl.trim().replace(/\/$/, "");
+    if (!username || !password) return setMessage("Informe usuário e senha.");
+    setLoading(true);
+    try {
+      localStorage.setItem("centralApiUrl", cleanApiUrl);
+      const res = await fetch(`${cleanApiUrl}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.ok)
+        throw new Error(body.message || `HTTP ${res.status}`);
+      setToken(body.token);
+      setAuthUser(body.user);
+      localStorage.setItem("dashboardAuthToken", body.token);
+      localStorage.setItem("dashboardAuthUser", JSON.stringify(body.user));
+      localStorage.setItem("dashboardUser", username);
+      setMessage("Login realizado com sucesso.");
+    } catch (err) {
+      setMessage(err?.message || String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function logout() {
+    try {
+      if (token) await apiFetch("/api/auth/logout", { method: "POST" });
+    } catch {}
+    setToken("");
+    setAuthUser(null);
+    localStorage.removeItem("dashboardAuthToken");
+    localStorage.removeItem("dashboardAuthUser");
+    setRealtime(false);
+    setMessage("Sessão encerrada.");
+  }
+
   async function apiFetch(path, options = {}) {
     const cleanApiUrl = apiUrl.trim().replace(/\/$/, "");
     const headers = {
@@ -732,7 +807,6 @@ function App() {
     try {
       const cleanApiUrl = apiUrl.trim().replace(/\/$/, "");
       localStorage.setItem("centralApiUrl", cleanApiUrl);
-      localStorage.setItem("centralApiToken", token);
       const [h, c, a, ah, m, s] = await Promise.all([
         fetch(`${cleanApiUrl}/health`),
         apiFetch("/api/clients"),
@@ -813,44 +887,14 @@ function App() {
     }
   }
 
-  async function requestCriticalReauth() {
-    const password = window.prompt(
-      "Comando crítico detectado. Informe a senha de segurança para continuar:",
-    );
-    if (!password) return null;
-    const res = await apiFetch("/api/auth/reauth", {
-      method: "POST",
-      body: JSON.stringify({
-        password,
-        reason: "dashboard-web-critical-command",
-      }),
-    });
-    const body = await res.json();
-    if (!res.ok || !body.ok)
-      throw new Error(body.message || "Falha na reautenticação.");
-    return body.reauthToken;
-  }
-
   async function queueScript() {
     if (!selectedAgent)
       return setMessage("Selecione um Agent antes de enfileirar script.");
     if (!sql.trim()) return setMessage("Informe um SQL/script.");
     setLoading(true);
     try {
-      const critical = isCriticalSql(sql);
-      let reauthToken = null;
-      if (critical) {
-        if (!allowDangerous) {
-          throw new Error(
-            "Comando crítico detectado. Marque a liberação e faça login de segurança.",
-          );
-        }
-        reauthToken = await requestCriticalReauth();
-        if (!reauthToken) throw new Error("Execução cancelada pelo usuário.");
-      }
       const res = await apiFetch("/api/scripts/queue", {
         method: "POST",
-        headers: reauthToken ? { "X-Reauth-Token": reauthToken } : {},
         body: JSON.stringify({
           agentId: selectedAgent,
           sql,
@@ -875,10 +919,11 @@ function App() {
   }
 
   useEffect(() => {
+    if (!token) return;
     load();
     const id = setInterval(load, 30000);
     return () => clearInterval(id);
-  }, []);
+  }, [token]);
   useEffect(() => {
     localStorage.setItem("dashboardWebViewMode", viewMode);
   }, [viewMode]);
@@ -886,6 +931,7 @@ function App() {
     localStorage.setItem("dashboardWebDensity", density);
   }, [density]);
   useEffect(() => {
+    if (!token) return;
     const cleanApiUrl = apiUrl.trim().replace(/\/$/, "");
     const url = `${cleanApiUrl}/api/realtime?token=${encodeURIComponent(token)}`;
     const es = new EventSource(url);
@@ -924,6 +970,18 @@ function App() {
     return () => es.close();
   }, [apiUrl, token]);
 
+  if (!token || !authUser) {
+    return (
+      <LoginScreen
+        apiUrl={apiUrl}
+        setApiUrl={setApiUrl}
+        onLogin={login}
+        message={message}
+        loading={loading}
+      />
+    );
+  }
+
   return (
     <main className={viewMode === "list" ? "list-mode" : ""}>
       <header className="hero noc-hero">
@@ -951,11 +1009,12 @@ function App() {
           <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} />
         </label>
         <label>
-          Token
-          <input value={token} onChange={(e) => setToken(e.target.value)} />
+          Usuário logado
+          <input value={authUser?.username || ""} readOnly />
         </label>
         <div className="status">
           <strong>Status:</strong> {message}
+          <button className="secondary-button" onClick={logout}>Sair</button>
         </div>
       </section>
 

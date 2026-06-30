@@ -1508,3 +1508,49 @@ main {
     padding: 4px 8px;
   }
 }
+
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+}
+.login-card {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 16px;
+  background: linear-gradient(180deg, #0f172af2, #0b1220f2);
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  padding: 28px;
+  box-shadow: 0 24px 90px #0009;
+}
+.login-brand {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.login-brand svg {
+  color: var(--cyan);
+  flex: 0 0 auto;
+}
+.login-card h1 {
+  font-size: 30px;
+}
+.login-help {
+  color: var(--muted);
+  line-height: 1.5;
+}
+.secondary-button {
+  background: #1f2a44;
+  color: var(--text);
+  box-shadow: none;
+  margin-left: 12px;
+}
+.settings .status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
