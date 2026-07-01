@@ -12,7 +12,6 @@ import {
   HardDrive,
   Lock,
   LayoutDashboard,
-  Link2,
   List,
   Play,
   RefreshCcw,
@@ -20,16 +19,17 @@ import {
   Search,
   ShieldCheck,
   TerminalSquare,
-  UserRound,
-  Eye,
-  EyeOff,
   Trash2,
   Wifi,
   Zap,
+  Users,
+  UserPlus,
+  Save,
+  X,
 } from "lucide-react";
 import "./styles.css";
 
-const VERSION = "3.3.15";
+const VERSION = "3.3.20";
 const DEFAULT_API_URL =
   localStorage.getItem("centralApiUrl") ||
   import.meta.env.VITE_API_URL ||
@@ -607,109 +607,98 @@ function ClientListView({
   );
 }
 
+function roleLabel(role) {
+  const r = String(role || "").toUpperCase();
+  if (r === "ADMIN") return "Administrador";
+  if (r === "DBA") return "DBA";
+  if (r === "OPERATOR") return "Operador";
+  if (r === "READONLY") return "Somente leitura";
+  return r || "-";
+}
+
+function UsersPanel({ users, form, setForm, onCreate, onUpdate, onDelete, loading, authUser }) {
+  const isAdmin = String(authUser?.role || "").toUpperCase() === "ADMIN";
+  if (!isAdmin) {
+    return (
+      <section className="panel users-panel">
+        <div className="section-title"><h2><Users size={20}/> Usuários</h2><span>Acesso restrito</span></div>
+        <p className="muted left">Apenas usuários ADMIN podem gerenciar usuários do Dashboard.</p>
+      </section>
+    );
+  }
+  return (
+    <section className="panel users-panel">
+      <div className="section-title">
+        <h2><Users size={20}/> Gerenciamento de usuários</h2>
+        <span>Autenticação baseada no PostgreSQL/Prisma</span>
+      </div>
+      <div className="user-form-grid">
+        <label className="field">Nome<input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Ex: J S Moreira" /></label>
+        <label className="field">Usuário<input value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} placeholder="Ex: jeferson" /></label>
+        <label className="field">E-mail<input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="opcional" /></label>
+        <label className="field">Senha<input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="mínimo 8 caracteres" /></label>
+        <label className="field">Perfil<select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
+          <option value="ADMIN">Administrador</option><option value="DBA">DBA</option><option value="OPERATOR">Operador</option><option value="READONLY">Somente leitura</option>
+        </select></label>
+        <label className="check user-active"><input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} /> Ativo</label>
+        <button onClick={onCreate} disabled={loading}><UserPlus size={18}/> Criar usuário</button>
+      </div>
+      <div className="users-table">
+        <div className="users-head"><span>Nome</span><span>Usuário</span><span>E-mail</span><span>Perfil</span><span>Status</span><span>Último login</span><span>Ações</span></div>
+        {users.length ? users.map(u => <div className="users-row" key={u.id}>
+          <span><strong>{u.name || '-'}</strong></span><span>{u.username}</span><span>{u.email || '-'}</span><span><Pill tone={u.role === 'ADMIN' ? 'warn' : 'info'}>{roleLabel(u.role)}</Pill></span><span><Pill tone={u.active ? 'ok' : 'danger'}>{u.active ? 'Ativo' : 'Inativo'}</Pill></span><span>{fmtDate(u.lastLoginAt)}</span>
+          <span className="user-actions">
+            <button className="secondary-button" title="Ativar/Inativar" onClick={() => onUpdate(u.id, { active: !u.active })} disabled={loading || u.id === authUser?.id}>{u.active ? 'Inativar' : 'Ativar'}</button>
+            <button className="secondary-button" title="Tornar DBA" onClick={() => onUpdate(u.id, { role: u.role === 'ADMIN' ? 'DBA' : 'ADMIN' })} disabled={loading || u.id === authUser?.id}>{u.role === 'ADMIN' ? 'DBA' : 'Admin'}</button>
+            <button className="danger-button" title="Excluir" onClick={() => onDelete(u)} disabled={loading || u.id === authUser?.id}><Trash2 size={16}/></button>
+          </span>
+        </div>) : <div className="empty-list">Nenhum usuário cadastrado.</div>}
+      </div>
+    </section>
+  );
+}
+
 function LoginScreen({ apiUrl, setApiUrl, onLogin, message, loading }) {
   const [username, setUsername] = useState(localStorage.getItem("dashboardUser") || "admin");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-
-  function submitLogin() {
-    if (!loading) onLogin(username.trim(), password);
-  }
-
   return (
     <main className="login-page">
-      <section className="login-shell glass">
-        <aside className="login-info">
-          <div className="login-info-icon">
-            <ShieldCheck size={52} />
+      <section className="login-card glass">
+        <div className="login-brand">
+          <ShieldCheck size={34} />
+          <div>
+            <p className="eyebrow">Oracle DBA Platform</p>
+            <h1>Login do Dashboard</h1>
+            <p>Acesse o monitoramento web usando o usuário da Central API.</p>
           </div>
-          <p className="eyebrow">Oracle DBA Platform</p>
-          <h1>Dashboard de Monitoramento</h1>
-          <p>
-            Acesse o painel web para acompanhar clientes, métricas Oracle,
-            backups e comandos remotos com segurança.
-          </p>
-          <div className="login-oracle-art" aria-hidden="true">
-            <span className="db-cylinder" />
-            <span className="server-box left" />
-            <span className="server-box right" />
-            <span className="pulse-line" />
-          </div>
-        </aside>
-
-        <section className="login-card">
-          <div className="login-brand">
-           
-            <div>
-              <h2>Login do Dashboard</h2>
-              <p>Informe suas credenciais para acessar o painel.</p>
-            </div>
-          </div>
-
-          <div className="login-form">
-            <label className="login-field">
-              <span>URL da API Central</span>
-              <div className="input-wrap">
-                <Link2 size={18} />
-                <input
-                  value={apiUrl}
-                  onChange={(e) => setApiUrl(e.target.value)}
-                  placeholder="https://central-api-production.up.railway.app"
-                  autoComplete="url"
-                />
-              </div>
-            </label>
-
-            <label className="login-field">
-              <span>Usuário</span>
-              <div className="input-wrap">
-                <UserRound size={18} />
-                <input
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="admin"
-                  autoComplete="username"
-                />
-              </div>
-            </label>
-
-            <label className="login-field">
-              <span>Senha</span>
-              <div className="input-wrap">
-                <Lock size={18} />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Digite sua senha"
-                  autoComplete="current-password"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") submitLogin();
-                  }}
-                />
-                <button
-                  type="button"
-                  className="password-toggle"
-                  onClick={() => setShowPassword((v) => !v)}
-                  aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </label>
-
-            <button className="login-submit" disabled={loading} onClick={submitLogin}>
-               {loading ? "Entrando..." : "Entrar"}
-            </button>
-          </div>
-
-          <div className="login-status">
-            <CheckCircle2 size={18} />
-            <span><strong>Status:</strong> {message}</span>
-          </div>
-
-         
-        </section>
+        </div>
+        <label>
+          URL da API Central
+          <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} />
+        </label>
+        <label>
+          Usuário
+          <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
+        </label>
+        <label>
+          Senha
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onLogin(username, password);
+            }}
+          />
+        </label>
+        <button disabled={loading} onClick={() => onLogin(username, password)}>
+          <Lock size={18} /> Entrar
+        </button>
+        <div className="status"><strong>Status:</strong> {message}</div>
+        <small className="login-help">
+          Configure no Railway/Central API: DASHBOARD_ADMIN_USER e DASHBOARD_ADMIN_PASSWORD.
+        </small>
       </section>
     </main>
   );
@@ -750,6 +739,9 @@ function App() {
     localStorage.getItem("dashboardWebDensity") || "compact",
   );
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [activeSection, setActiveSection] = useState("dashboard");
+  const [users, setUsers] = useState([]);
+  const [userForm, setUserForm] = useState({ name: "", username: "", email: "", password: "", role: "DBA", active: true });
 
   const onlineCount = useMemo(
     () => clients.filter((c) => ageOk(c.lastSeenAt)).length,
@@ -878,13 +870,15 @@ function App() {
     try {
       const cleanApiUrl = apiUrl.trim().replace(/\/$/, "");
       localStorage.setItem("centralApiUrl", cleanApiUrl);
-      const [h, c, a, ah, m, s] = await Promise.all([
+      const isAdmin = String(authUser?.role || "").toUpperCase() === "ADMIN";
+      const [h, c, a, ah, m, s, u] = await Promise.all([
         fetch(`${cleanApiUrl}/health`),
         apiFetch("/api/clients"),
         apiFetch("/api/alerts"),
         apiFetch("/api/alerts/history"),
         apiFetch("/api/metrics?limit=300"),
         apiFetch("/api/scripts"),
+        isAdmin ? apiFetch("/api/users") : Promise.resolve(null),
       ]);
       if (!h.ok) throw new Error(`Health HTTP ${h.status}`);
       if (!c.ok) throw new Error(`Clientes HTTP ${c.status}`);
@@ -892,6 +886,7 @@ function App() {
       if (!ah.ok) throw new Error(`Histórico HTTP ${ah.status}`);
       if (!m.ok) throw new Error(`Métricas HTTP ${m.status}`);
       if (!s.ok) throw new Error(`Scripts HTTP ${s.status}`);
+      if (u && !u.ok) throw new Error(`Usuários HTTP ${u.status}`);
       const clientsRows = (await c.json()).rows || [];
       setHealth(await h.json());
       setClients(clientsRows);
@@ -899,6 +894,7 @@ function App() {
       setAlertHistory((await ah.json()).rows || []);
       setMetrics((await m.json()).rows || []);
       setCommands((await s.json()).rows || []);
+      if (u) setUsers((await u.json()).rows || []);
       setSelectedAgent((prev) => {
         if (prev && clientsRows.some((c) => c.agentId === prev)) return prev;
         return clientsRows[0]?.agentId || "";
@@ -958,6 +954,46 @@ function App() {
     } finally {
       setLoading(false);
     }
+  }
+
+
+  async function createUser() {
+    if (!userForm.username || !userForm.password) return setMessage("Informe usuário e senha.");
+    setLoading(true);
+    try {
+      const res = await apiFetch("/api/users", { method: "POST", body: JSON.stringify(userForm) });
+      const body = await res.json();
+      if (!res.ok || !body.ok) throw new Error(body.message || `HTTP ${res.status}`);
+      setUserForm({ name: "", username: "", email: "", password: "", role: "DBA", active: true });
+      setMessage("Usuário criado com sucesso.");
+      await load();
+    } catch (err) { setMessage(err?.message || String(err)); }
+    finally { setLoading(false); }
+  }
+
+  async function updateUser(userId, data) {
+    setLoading(true);
+    try {
+      const res = await apiFetch(`/api/users/${encodeURIComponent(userId)}`, { method: "PATCH", body: JSON.stringify(data) });
+      const body = await res.json();
+      if (!res.ok || !body.ok) throw new Error(body.message || `HTTP ${res.status}`);
+      setMessage("Usuário atualizado.");
+      await load();
+    } catch (err) { setMessage(err?.message || String(err)); }
+    finally { setLoading(false); }
+  }
+
+  async function deleteUser(user) {
+    if (!window.confirm(`Excluir usuário ${user.username}?`)) return;
+    setLoading(true);
+    try {
+      const res = await apiFetch(`/api/users/${encodeURIComponent(user.id)}`, { method: "DELETE" });
+      const body = await res.json();
+      if (!res.ok || !body.ok) throw new Error(body.message || `HTTP ${res.status}`);
+      setMessage(body.message || "Usuário excluído.");
+      await load();
+    } catch (err) { setMessage(err?.message || String(err)); }
+    finally { setLoading(false); }
   }
 
   async function queueScript() {
@@ -1091,6 +1127,17 @@ function App() {
           <button className="secondary-button" onClick={logout}>Sair</button>
         </div>
       </section>
+
+      <section className="panel view-toolbar glass module-toolbar">
+        <div className="view-mode-buttons">
+          <button className={activeSection === "dashboard" ? "active" : ""} onClick={() => setActiveSection("dashboard")}><LayoutDashboard size={18}/> Monitoramento</button>
+          {String(authUser?.role || "").toUpperCase() === "ADMIN" && <button className={activeSection === "users" ? "active" : ""} onClick={() => setActiveSection("users")}><Users size={18}/> Usuários</button>}
+        </div>
+      </section>
+
+      {activeSection === "users" && <UsersPanel users={users} form={userForm} setForm={setUserForm} onCreate={createUser} onUpdate={updateUser} onDelete={deleteUser} loading={loading} authUser={authUser} />}
+
+      {activeSection === "dashboard" && <>
 
       <section className="panel view-toolbar glass">
         <div className="view-mode-buttons">
@@ -1493,6 +1540,8 @@ function App() {
             : "Sem métricas."}
         </pre>
       </section>
+
+      </>}
 
       {pendingDelete && (
         <div className="modal-backdrop" onClick={() => setPendingDelete(null)}>

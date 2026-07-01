@@ -53,7 +53,7 @@ const DASHBOARD_SESSION_TTL_MS = Math.max(
   Number(process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000),
 );
 const dashboardSessions = new Map();
-const VERSION = "3.3.19";
+const VERSION = "3.3.20";
 const startedAt = Date.now();
 const sseClients = new Set();
 const LOG_DIR = path.join(process.cwd(), "logs");
@@ -230,13 +230,22 @@ function normalizeUser(user) {
   if (!user) return null;
   return {
     id: user.id,
+    name: user.name || "",
     username: user.username,
+    email: user.email || "",
     role: user.role,
     active: user.active,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     lastLoginAt: user.lastLoginAt,
   };
+}
+function normalizeRole(role) {
+  const value = String(role || "DBA").trim().toUpperCase();
+  return ["ADMIN", "DBA", "OPERATOR", "READONLY"].includes(value) ? value : "DBA";
+}
+function canManageUsers(authUser) {
+  return isAdmin(authUser);
 }
 function isAdmin(authUser) {
   return String(authUser?.role || "").toUpperCase() === "ADMIN";
@@ -254,6 +263,7 @@ async function bootstrapDashboardAdmin() {
   }
   const user = await prisma.dashboardUser.create({
     data: {
+      name: "Administrador",
       username,
       passwordHash: hashPassword(password),
       role: "ADMIN",
@@ -649,27 +659,31 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (req.method === "GET" && pathname === "/api/users") {
-      if (!isAdmin(authUser))
+      if (!canManageUsers(authUser))
         return send(res, 403, { ok: false, message: "Apenas ADMIN pode listar usuários." });
       const rows = await prisma.dashboardUser.findMany({
-        orderBy: { createdAt: "asc" },
+        orderBy: [{ active: "desc" }, { username: "asc" }],
       });
       return send(res, 200, { ok: true, rows: rows.map(normalizeUser) });
     }
     if (req.method === "POST" && pathname === "/api/users") {
-      if (!isAdmin(authUser))
+      if (!canManageUsers(authUser))
         return send(res, 403, { ok: false, message: "Apenas ADMIN pode criar usuários." });
       const body = await readJson(req);
-      const username = String(body.username || "").trim();
+      const username = String(body.username || "").trim().toLowerCase();
       const password = String(body.password || "");
-      const role = String(body.role || "DBA").trim().toUpperCase();
+      const role = normalizeRole(body.role);
       if (!username || !password)
         return send(res, 400, { ok: false, message: "Informe usuário e senha." });
+      if (!/^[a-z0-9._-]{3,40}$/.test(username))
+        return send(res, 400, { ok: false, message: "Usuário deve ter 3 a 40 caracteres e usar apenas letras, números, ponto, hífen ou underline." });
       if (password.length < 8)
         return send(res, 400, { ok: false, message: "A senha deve ter no mínimo 8 caracteres." });
       const user = await prisma.dashboardUser.create({
         data: {
+          name: String(body.name || username).trim(),
           username,
+          email: body.email ? String(body.email).trim().toLowerCase() : null,
           passwordHash: hashPassword(password),
           role,
           active: body.active === undefined ? true : Boolean(body.active),
@@ -682,7 +696,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 201, { ok: true, user: normalizeUser(user) });
     }
     if (req.method === "PATCH" && req.url?.startsWith("/api/users/")) {
-      if (!isAdmin(authUser))
+      if (!canManageUsers(authUser))
         return send(res, 403, { ok: false, message: "Apenas ADMIN pode alterar usuários." });
       const url = new URL(req.url, `http://${req.headers.host}`);
       const userId = decodeURIComponent(url.pathname.replace("/api/users/", "")).trim();
@@ -694,7 +708,9 @@ const server = http.createServer(async (req, res) => {
           return send(res, 400, { ok: false, message: "A senha deve ter no mínimo 8 caracteres." });
         data.passwordHash = hashPassword(password);
       }
-      if (body.role !== undefined) data.role = String(body.role || "DBA").trim().toUpperCase();
+      if (body.name !== undefined) data.name = String(body.name || "").trim();
+      if (body.email !== undefined) data.email = body.email ? String(body.email).trim().toLowerCase() : null;
+      if (body.role !== undefined) data.role = normalizeRole(body.role);
       if (body.active !== undefined) data.active = Boolean(body.active);
       if (!Object.keys(data).length)
         return send(res, 400, { ok: false, message: "Nenhuma alteração informada." });
@@ -704,6 +720,17 @@ const server = http.createServer(async (req, res) => {
         user: normalizeUser(user),
       });
       return send(res, 200, { ok: true, user: normalizeUser(user) });
+    }
+    if (req.method === "DELETE" && req.url?.startsWith("/api/users/")) {
+      if (!canManageUsers(authUser))
+        return send(res, 403, { ok: false, message: "Apenas ADMIN pode excluir usuários." });
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const userId = decodeURIComponent(url.pathname.replace("/api/users/", "")).trim();
+      if (authUser.userId === userId)
+        return send(res, 400, { ok: false, message: "Você não pode excluir o próprio usuário logado." });
+      const user = await prisma.dashboardUser.delete({ where: { id: userId } });
+      await audit("dashboard.user.delete", { by: authUser.username, user: normalizeUser(user) });
+      return send(res, 200, { ok: true, user: normalizeUser(user), message: "Usuário excluído." });
     }
     if (req.method === "GET" && pathname === "/api/realtime") {
       res.writeHead(200, {
