@@ -53,7 +53,7 @@ const DASHBOARD_SESSION_TTL_MS = Math.max(
   Number(process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000),
 );
 const dashboardSessions = new Map();
-const VERSION = "3.3.21";
+const VERSION = "3.3.22";
 const startedAt = Date.now();
 const sseClients = new Set();
 const LOG_DIR = path.join(process.cwd(), "logs");
@@ -152,12 +152,48 @@ function verifyDashboardSession(token) {
     return null;
   }
 }
-function auth(req) {
+async function auth(req) {
   const bearer = getBearer(req);
-  if (safeEqual(bearer, TOKEN)) return { type: "api-token", username: "agent-or-api", role: "SYSTEM" };
+  if (safeEqual(bearer, TOKEN)) {
+    return {
+      type: "api-token",
+      username: "agent-or-api",
+      role: "SYSTEM",
+      permissions: ["SYSTEM"],
+    };
+  }
+
   const session = verifyDashboardSession(bearer);
-  if (session) return { type: "dashboard", userId: session.userId || null, username: session.username, role: session.role || "ADMIN" };
-  return null;
+  if (!session) return null;
+
+  // A sessão não é a fonte final de permissões. A cada requisição do Dashboard,
+  // a Central API consulta o usuário atual no banco para respeitar alterações de
+  // perfil, desativação de conta e troca de permissões sem precisar reiniciar.
+  if (session.userId) {
+    const user = await prisma.dashboardUser.findUnique({
+      where: { id: session.userId },
+    });
+    if (!user || !user.active) {
+      dashboardSessions.delete(session.sid);
+      return null;
+    }
+    return {
+      type: "dashboard",
+      userId: user.id,
+      username: user.username,
+      name: user.name || "",
+      role: normalizeRole(user.role),
+      permissions: permissionsForRole(user.role),
+    };
+  }
+
+  return {
+    type: "dashboard",
+    userId: null,
+    username: session.username,
+    role: normalizeRole(session.role || "READONLY"),
+    permissions: permissionsForRole(session.role || "READONLY"),
+  };
 }
 function readJson(req) {
   return new Promise((resolve, reject) => {
@@ -244,8 +280,50 @@ function normalizeRole(role) {
   const value = String(role || "DBA").trim().toUpperCase();
   return ["ADMIN", "DBA", "OPERATOR", "READONLY"].includes(value) ? value : "DBA";
 }
+const ROLE_PERMISSIONS = {
+  ADMIN: [
+    "VIEW_DASHBOARD",
+    "VIEW_METRICS",
+    "VIEW_USERS",
+    "MANAGE_USERS",
+    "EXECUTE_SELECT",
+    "EXECUTE_SQL",
+    "EXECUTE_DML",
+    "EXECUTE_CRITICAL",
+    "MANAGE_AGENTS",
+    "CLEAR_COMMAND_HISTORY",
+  ],
+  DBA: [
+    "VIEW_DASHBOARD",
+    "VIEW_METRICS",
+    "EXECUTE_SELECT",
+    "EXECUTE_SQL",
+    "EXECUTE_DML",
+    "EXECUTE_CRITICAL",
+    "CLEAR_COMMAND_HISTORY",
+  ],
+  OPERATOR: ["VIEW_DASHBOARD", "VIEW_METRICS", "EXECUTE_SELECT"],
+  READONLY: ["VIEW_DASHBOARD", "VIEW_METRICS"],
+  SYSTEM: ["SYSTEM"],
+};
+function permissionsForRole(role) {
+  return ROLE_PERMISSIONS[normalizeRole(role)] || ROLE_PERMISSIONS.READONLY;
+}
+function hasPermission(authUser, permission) {
+  if (authUser?.type === "api-token" || authUser?.role === "SYSTEM") return true;
+  return Array.isArray(authUser?.permissions) && authUser.permissions.includes(permission);
+}
+function requirePermission(authUser, permission, res, message) {
+  if (hasPermission(authUser, permission)) return true;
+  send(res, 403, {
+    ok: false,
+    message: message || "Você não possui permissão para executar esta operação.",
+    requiredPermission: permission,
+  });
+  return false;
+}
 function canManageUsers(authUser) {
-  return isAdmin(authUser);
+  return hasPermission(authUser, "MANAGE_USERS");
 }
 function isAdmin(authUser) {
   return String(authUser?.role || "").toUpperCase() === "ADMIN";
@@ -576,11 +654,37 @@ async function dbHealth() {
     return { ok: false, message: err.message };
   }
 }
+function normalizeSqlForPermission(sql) {
+  return String(sql || "")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--.*$/gm, " ")
+    .trim()
+    .toLowerCase();
+}
+function classifySql(sql) {
+  const s = normalizeSqlForPermission(sql);
+  const first = (s.match(/^\s*([a-z]+)/) || [])[1] || "";
+  const isSelectOnly = /^(select|with|show|desc|describe)\b/.test(s);
+  const isCritical = /\b(shutdown|startup|drop\b|truncate\b|alter\s+system|alter\s+database|kill\s+session|disconnect\s+session)\b/.test(s);
+  const isDml = /\b(insert\s+into|update\s+\w+\s+set|delete\s+from|merge\s+into|create\b|alter\b|grant\b|revoke\b)\b/.test(s);
+  const deleteWithoutWhere = /\bdelete\s+from\b/.test(s) && !/\bwhere\b/.test(s);
+  return {
+    first,
+    isSelectOnly,
+    isCritical: isCritical || deleteWithoutWhere,
+    isDml,
+    deleteWithoutWhere,
+  };
+}
 function isDangerousSql(sql) {
-  const s = String(sql || "").toLowerCase();
-  return /\b(drop|truncate|shutdown|startup|alter\s+system|alter\s+database|delete\s+from|update\s+\w+\s+set)\b/.test(
-    s,
-  );
+  return classifySql(sql).isCritical;
+}
+function requiredPermissionForSql(sql) {
+  const c = classifySql(sql);
+  if (c.isCritical) return "EXECUTE_CRITICAL";
+  if (c.isDml) return "EXECUTE_DML";
+  if (c.isSelectOnly) return "EXECUTE_SELECT";
+  return "EXECUTE_SQL";
 }
 
 const server = http.createServer(async (req, res) => {
@@ -632,7 +736,10 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, {
         ok: true,
         token,
-        user: normalizeUser(updatedUser),
+        user: {
+          ...normalizeUser(updatedUser),
+          permissions: permissionsForRole(updatedUser.role),
+        },
         expiresInMs: DASHBOARD_SESSION_TTL_MS,
       });
     }
@@ -641,7 +748,7 @@ const server = http.createServer(async (req, res) => {
       if (session?.sid) dashboardSessions.delete(session.sid);
       return send(res, 200, { ok: true, message: "Sessão encerrada." });
     }
-    const authUser = pathname.startsWith("/api/") ? auth(req) : null;
+    const authUser = pathname.startsWith("/api/") ? await auth(req) : null;
     if (pathname.startsWith("/api/") && !authUser)
       return send(res, 401, {
         ok: false,
@@ -653,7 +760,9 @@ const server = http.createServer(async (req, res) => {
         user: {
           id: authUser.userId || null,
           username: authUser.username,
+          name: authUser.name || "",
           role: authUser.role,
+          permissions: authUser.permissions || [],
           type: authUser.type,
         },
       });
@@ -816,6 +925,7 @@ const server = http.createServer(async (req, res) => {
     )
       return send(res, 200, { ok: true, rows: await summarizeInstances() });
     if (req.method === "DELETE" && req.url?.startsWith("/api/agents/")) {
+      if (!requirePermission(authUser, "MANAGE_AGENTS", res, "Apenas ADMIN pode excluir clientes/agents.")) return;
       const url = new URL(req.url, `http://${req.headers.host}`);
       const agentId = decodeURIComponent(
         url.pathname.replace("/api/agents/", ""),
@@ -886,7 +996,19 @@ const server = http.createServer(async (req, res) => {
         return send(res, 400, { ok: false, message: "Informe o Agent." });
       if (!sql)
         return send(res, 400, { ok: false, message: "Informe o SQL/script." });
-      const dangerous = isDangerousSql(sql);
+      const sqlClass = classifySql(sql);
+      const requiredPermission = requiredPermissionForSql(sql);
+      if (!requirePermission(authUser, requiredPermission, res, "Seu perfil não permite executar este tipo de script.")) {
+        await audit("script.queue.denied", {
+          by: authUser?.username || null,
+          role: authUser?.role || null,
+          agentId,
+          requiredPermission,
+          sqlPreview: sql.slice(0, 500),
+        });
+        return;
+      }
+      const dangerous = sqlClass.isCritical;
       const status =
         dangerous && !allowDangerous ? "BLOCKED_REVIEW_REQUIRED" : "QUEUED";
       const note =
@@ -903,7 +1025,13 @@ const server = http.createServer(async (req, res) => {
           note,
         },
       });
-      await audit("script.queue", normalizeCommand(command));
+      await audit("script.queue", {
+        ...normalizeCommand(command),
+        by: authUser?.username || null,
+        role: authUser?.role || null,
+        requiredPermission,
+        classification: sqlClass,
+      });
       broadcast("command", normalizeCommand(command));
       return send(res, 201, {
         ok: status === "QUEUED",
@@ -927,6 +1055,7 @@ const server = http.createServer(async (req, res) => {
       req.method === "DELETE" &&
       req.url?.startsWith("/api/scripts/history")
     ) {
+      if (!requirePermission(authUser, "CLEAR_COMMAND_HISTORY", res, "Você não possui permissão para limpar o histórico de comandos.")) return;
       const url = new URL(req.url, `http://${req.headers.host}`);
       const agentId = url.searchParams.get("agentId") || undefined;
       const where = {
