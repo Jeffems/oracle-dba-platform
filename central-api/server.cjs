@@ -53,7 +53,7 @@ const DASHBOARD_SESSION_TTL_MS = Math.max(
   Number(process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000),
 );
 const dashboardSessions = new Map();
-const VERSION = "3.3.20";
+const VERSION = "3.3.21";
 const startedAt = Date.now();
 const sseClients = new Set();
 const LOG_DIR = path.join(process.cwd(), "logs");
