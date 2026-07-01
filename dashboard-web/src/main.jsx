@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const VERSION = "3.3.20";
+const VERSION = "3.3.22";
 const DEFAULT_API_URL =
   localStorage.getItem("centralApiUrl") ||
   import.meta.env.VITE_API_URL ||
@@ -82,6 +82,25 @@ function statusClass(status) {
     return "danger";
   if (status === "IN_PROGRESS") return "info";
   return "warn";
+}
+
+function hasPermission(user, permission) {
+  const role = String(user?.role || "").toUpperCase();
+  if (role === "ADMIN") return true;
+  return (
+    Array.isArray(user?.permissions) && user.permissions.includes(permission)
+  );
+}
+function canOpenUsers(user) {
+  return hasPermission(user, "MANAGE_USERS");
+}
+function canQueueAnyScript(user) {
+  return (
+    hasPermission(user, "EXECUTE_SELECT") ||
+    hasPermission(user, "EXECUTE_SQL") ||
+    hasPermission(user, "EXECUTE_DML") ||
+    hasPermission(user, "EXECUTE_CRITICAL")
+  );
 }
 
 function clientSeverity(c) {
@@ -500,9 +519,7 @@ function ClientListView({
           <h2>
             <List size={20} /> Modo lista — clientes
           </h2>
-          <p>
-            Visão compacta de todos os clientes - Ordena críticos primeiro.  
-          </p>
+          <p>Visão compacta de todos os clientes - Ordena críticos primeiro.</p>
         </div>
         <div className="list-count">
           <strong>{rows.length}</strong>
@@ -616,50 +633,171 @@ function roleLabel(role) {
   return r || "-";
 }
 
-function UsersPanel({ users, form, setForm, onCreate, onUpdate, onDelete, loading, authUser }) {
+function UsersPanel({
+  users,
+  form,
+  setForm,
+  onCreate,
+  onUpdate,
+  onDelete,
+  loading,
+  authUser,
+}) {
   const isAdmin = String(authUser?.role || "").toUpperCase() === "ADMIN";
   if (!isAdmin) {
     return (
       <section className="panel users-panel">
-        <div className="section-title"><h2><Users size={20}/> Usuários</h2><span>Acesso restrito</span></div>
-        <p className="muted left">Apenas usuários ADMIN podem gerenciar usuários do Dashboard.</p>
+        <div className="section-title">
+          <h2>
+            <Users size={20} /> Usuários
+          </h2>
+          <span>Acesso restrito</span>
+        </div>
+        <p className="muted left">
+          Apenas usuários ADMIN podem gerenciar usuários do Dashboard.
+        </p>
       </section>
     );
   }
   return (
     <section className="panel users-panel">
       <div className="section-title">
-        <h2><Users size={20}/> Gerenciamento de usuários</h2>
+        <h2>
+          <Users size={20} /> Gerenciamento de usuários
+        </h2>
         <span>Autenticação baseada no PostgreSQL/Prisma</span>
       </div>
       <div className="user-form-grid">
-        <label className="field">Nome<input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Ex: J S Moreira" /></label>
-        <label className="field">Usuário<input value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} placeholder="Ex: jeferson" /></label>
-        <label className="field">E-mail<input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="opcional" /></label>
-        <label className="field">Senha<input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} placeholder="mínimo 8 caracteres" /></label>
-        <label className="field">Perfil<select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
-          <option value="ADMIN">Administrador</option><option value="DBA">DBA</option><option value="OPERATOR">Operador</option><option value="READONLY">Somente leitura</option>
-        </select></label>
-        <label className="check user-active"><input type="checkbox" checked={form.active} onChange={e => setForm({ ...form, active: e.target.checked })} /> Ativo</label>
-        <button onClick={onCreate} disabled={loading}><UserPlus size={18}/> Criar usuário</button>
+        <label className="field">
+          Nome
+          <input
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            placeholder="Ex: J S Moreira"
+          />
+        </label>
+        <label className="field">
+          Usuário
+          <input
+            value={form.username}
+            onChange={(e) => setForm({ ...form, username: e.target.value })}
+            placeholder="Ex: jeferson"
+          />
+        </label>
+        <label className="field">
+          E-mail
+          <input
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            placeholder="opcional"
+          />
+        </label>
+        <label className="field">
+          Senha
+          <input
+            type="password"
+            value={form.password}
+            onChange={(e) => setForm({ ...form, password: e.target.value })}
+            placeholder="mínimo 8 caracteres"
+          />
+        </label>
+        <label className="field">
+          Perfil
+          <select
+            value={form.role}
+            onChange={(e) => setForm({ ...form, role: e.target.value })}
+          >
+            <option value="ADMIN">Administrador</option>
+            <option value="DBA">DBA</option>
+            <option value="OPERATOR">Operador</option>
+            <option value="READONLY">Somente leitura</option>
+          </select>
+        </label>
+        <label className="check user-active">
+          <input
+            type="checkbox"
+            checked={form.active}
+            onChange={(e) => setForm({ ...form, active: e.target.checked })}
+          />{" "}
+          Ativo
+        </label>
+        <button onClick={onCreate} disabled={loading}>
+          <UserPlus size={18} /> Criar usuário
+        </button>
       </div>
       <div className="users-table">
-        <div className="users-head"><span>Nome</span><span>Usuário</span><span>E-mail</span><span>Perfil</span><span>Status</span><span>Último login</span><span>Ações</span></div>
-        {users.length ? users.map(u => <div className="users-row" key={u.id}>
-          <span><strong>{u.name || '-'}</strong></span><span>{u.username}</span><span>{u.email || '-'}</span><span><Pill tone={u.role === 'ADMIN' ? 'warn' : 'info'}>{roleLabel(u.role)}</Pill></span><span><Pill tone={u.active ? 'ok' : 'danger'}>{u.active ? 'Ativo' : 'Inativo'}</Pill></span><span>{fmtDate(u.lastLoginAt)}</span>
-          <span className="user-actions">
-            <button className="secondary-button" title="Ativar/Inativar" onClick={() => onUpdate(u.id, { active: !u.active })} disabled={loading || u.id === authUser?.id}>{u.active ? 'Inativar' : 'Ativar'}</button>
-            <button className="secondary-button" title="Tornar DBA" onClick={() => onUpdate(u.id, { role: u.role === 'ADMIN' ? 'DBA' : 'ADMIN' })} disabled={loading || u.id === authUser?.id}>{u.role === 'ADMIN' ? 'DBA' : 'Admin'}</button>
-            <button className="danger-button" title="Excluir" onClick={() => onDelete(u)} disabled={loading || u.id === authUser?.id}><Trash2 size={16}/></button>
-          </span>
-        </div>) : <div className="empty-list">Nenhum usuário cadastrado.</div>}
+        <div className="users-head">
+          <span>Nome</span>
+          <span>Usuário</span>
+          <span>E-mail</span>
+          <span>Perfil</span>
+          <span>Status</span>
+          <span>Último login</span>
+          <span>Ações</span>
+        </div>
+        {users.length ? (
+          users.map((u) => (
+            <div className="users-row" key={u.id}>
+              <span>
+                <strong>{u.name || "-"}</strong>
+              </span>
+              <span>{u.username}</span>
+              <span>{u.email || "-"}</span>
+              <span>
+                <Pill tone={u.role === "ADMIN" ? "warn" : "info"}>
+                  {roleLabel(u.role)}
+                </Pill>
+              </span>
+              <span>
+                <Pill tone={u.active ? "ok" : "danger"}>
+                  {u.active ? "Ativo" : "Inativo"}
+                </Pill>
+              </span>
+              <span>{fmtDate(u.lastLoginAt)}</span>
+              <span className="user-actions">
+                <button
+                  className="secondary-button"
+                  title="Ativar/Inativar"
+                  onClick={() => onUpdate(u.id, { active: !u.active })}
+                  disabled={loading || u.id === authUser?.id}
+                >
+                  {u.active ? "Inativar" : "Ativar"}
+                </button>
+                <button
+                  className="secondary-button"
+                  title="Tornar DBA"
+                  onClick={() =>
+                    onUpdate(u.id, {
+                      role: u.role === "ADMIN" ? "DBA" : "ADMIN",
+                    })
+                  }
+                  disabled={loading || u.id === authUser?.id}
+                >
+                  {u.role === "ADMIN" ? "DBA" : "Admin"}
+                </button>
+                <button
+                  className="danger-button"
+                  title="Excluir"
+                  onClick={() => onDelete(u)}
+                  disabled={loading || u.id === authUser?.id}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </span>
+            </div>
+          ))
+        ) : (
+          <div className="empty-list">Nenhum usuário cadastrado.</div>
+        )}
       </div>
     </section>
   );
 }
 
 function LoginScreen({ apiUrl, setApiUrl, onLogin, message, loading }) {
-  const [username, setUsername] = useState(localStorage.getItem("dashboardUser") || "admin");
+  const [username, setUsername] = useState(
+    localStorage.getItem("dashboardUser") || "admin",
+  );
   const [password, setPassword] = useState("");
   return (
     <main className="login-page">
@@ -678,7 +816,11 @@ function LoginScreen({ apiUrl, setApiUrl, onLogin, message, loading }) {
         </label>
         <label>
           Usuário
-          <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+          />
         </label>
         <label>
           Senha
@@ -695,9 +837,12 @@ function LoginScreen({ apiUrl, setApiUrl, onLogin, message, loading }) {
         <button disabled={loading} onClick={() => onLogin(username, password)}>
           <Lock size={18} /> Entrar
         </button>
-        <div className="status"><strong>Status:</strong> {message}</div>
+        <div className="status">
+          <strong>Status:</strong> {message}
+        </div>
         <small className="login-help">
-          Configure no Railway/Central API: DASHBOARD_ADMIN_USER e DASHBOARD_ADMIN_PASSWORD.
+          Configure no Railway/Central API: DASHBOARD_ADMIN_USER e
+          DASHBOARD_ADMIN_PASSWORD.
         </small>
       </section>
     </main>
@@ -741,7 +886,14 @@ function App() {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [activeSection, setActiveSection] = useState("dashboard");
   const [users, setUsers] = useState([]);
-  const [userForm, setUserForm] = useState({ name: "", username: "", email: "", password: "", role: "DBA", active: true });
+  const [userForm, setUserForm] = useState({
+    name: "",
+    username: "",
+    email: "",
+    password: "",
+    role: "DBA",
+    active: true,
+  });
 
   const onlineCount = useMemo(
     () => clients.filter((c) => ageOk(c.lastSeenAt)).length,
@@ -870,7 +1022,7 @@ function App() {
     try {
       const cleanApiUrl = apiUrl.trim().replace(/\/$/, "");
       localStorage.setItem("centralApiUrl", cleanApiUrl);
-      const isAdmin = String(authUser?.role || "").toUpperCase() === "ADMIN";
+      const canLoadUsers = canOpenUsers(authUser);
       const [h, c, a, ah, m, s, u] = await Promise.all([
         fetch(`${cleanApiUrl}/health`),
         apiFetch("/api/clients"),
@@ -878,7 +1030,7 @@ function App() {
         apiFetch("/api/alerts/history"),
         apiFetch("/api/metrics?limit=300"),
         apiFetch("/api/scripts"),
-        isAdmin ? apiFetch("/api/users") : Promise.resolve(null),
+        canLoadUsers ? apiFetch("/api/users") : Promise.resolve(null),
       ]);
       if (!h.ok) throw new Error(`Health HTTP ${h.status}`);
       if (!c.ok) throw new Error(`Clientes HTTP ${c.status}`);
@@ -894,7 +1046,10 @@ function App() {
       setAlertHistory((await ah.json()).rows || []);
       setMetrics((await m.json()).rows || []);
       setCommands((await s.json()).rows || []);
-      if (u) setUsers((await u.json()).rows || []);
+      if (u) {
+        const usersBody = await u.json();
+        setUsers(usersBody.rows || usersBody.users || usersBody.data || []);
+      }
       setSelectedAgent((prev) => {
         if (prev && clientsRows.some((c) => c.agentId === prev)) return prev;
         return clientsRows[0]?.agentId || "";
@@ -956,44 +1111,81 @@ function App() {
     }
   }
 
-
   async function createUser() {
-    if (!userForm.username || !userForm.password) return setMessage("Informe usuário e senha.");
+    if (!userForm.username || !userForm.password)
+      return setMessage("Informe usuário e senha.");
     setLoading(true);
     try {
-      const res = await apiFetch("/api/users", { method: "POST", body: JSON.stringify(userForm) });
+      const res = await apiFetch("/api/users", {
+        method: "POST",
+        body: JSON.stringify(userForm),
+      });
       const body = await res.json();
-      if (!res.ok || !body.ok) throw new Error(body.message || `HTTP ${res.status}`);
-      setUserForm({ name: "", username: "", email: "", password: "", role: "DBA", active: true });
+      if (!res.ok || !body.ok)
+        throw new Error(body.message || `HTTP ${res.status}`);
+      setUserForm({
+        name: "",
+        username: "",
+        email: "",
+        password: "",
+        role: "DBA",
+        active: true,
+      });
+      if (body.user)
+        setUsers((prev) => [
+          body.user,
+          ...prev.filter((u) => u.id !== body.user.id),
+        ]);
       setMessage("Usuário criado com sucesso.");
       await load();
-    } catch (err) { setMessage(err?.message || String(err)); }
-    finally { setLoading(false); }
+    } catch (err) {
+      setMessage(err?.message || String(err));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function updateUser(userId, data) {
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/users/${encodeURIComponent(userId)}`, { method: "PATCH", body: JSON.stringify(data) });
+      const res = await apiFetch(`/api/users/${encodeURIComponent(userId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      });
       const body = await res.json();
-      if (!res.ok || !body.ok) throw new Error(body.message || `HTTP ${res.status}`);
+      if (!res.ok || !body.ok)
+        throw new Error(body.message || `HTTP ${res.status}`);
+      if (body.user)
+        setUsers((prev) =>
+          prev.map((u) => (u.id === body.user.id ? body.user : u)),
+        );
       setMessage("Usuário atualizado.");
       await load();
-    } catch (err) { setMessage(err?.message || String(err)); }
-    finally { setLoading(false); }
+    } catch (err) {
+      setMessage(err?.message || String(err));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function deleteUser(user) {
     if (!window.confirm(`Excluir usuário ${user.username}?`)) return;
     setLoading(true);
     try {
-      const res = await apiFetch(`/api/users/${encodeURIComponent(user.id)}`, { method: "DELETE" });
+      const res = await apiFetch(`/api/users/${encodeURIComponent(user.id)}`, {
+        method: "DELETE",
+      });
       const body = await res.json();
-      if (!res.ok || !body.ok) throw new Error(body.message || `HTTP ${res.status}`);
+      if (!res.ok || !body.ok)
+        throw new Error(body.message || `HTTP ${res.status}`);
+      setUsers((prev) => prev.filter((u) => u.id !== user.id));
       setMessage(body.message || "Usuário excluído.");
       await load();
-    } catch (err) { setMessage(err?.message || String(err)); }
-    finally { setLoading(false); }
+    } catch (err) {
+      setMessage(err?.message || String(err));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function queueScript() {
@@ -1001,6 +1193,10 @@ function App() {
     if (!agentIdToQueue)
       return setMessage("Selecione um Agent antes de enfileirar script.");
     if (!sql.trim()) return setMessage("Informe um SQL/script.");
+    if (!canQueueAnyScript(authUser))
+      return setMessage(
+        "Seu perfil possui somente monitoramento e não pode executar scripts.",
+      );
     setScriptLoading(true);
     try {
       const res = await apiFetch("/api/scripts/queue", {
@@ -1124,424 +1320,473 @@ function App() {
         </label>
         <div className="status">
           <strong>Status:</strong> {message}
-          <button className="secondary-button" onClick={logout}>Sair</button>
+          <button className="secondary-button" onClick={logout}>
+            Sair
+          </button>
         </div>
       </section>
 
       <section className="panel view-toolbar glass module-toolbar">
         <div className="view-mode-buttons">
-          <button className={activeSection === "dashboard" ? "active" : ""} onClick={() => setActiveSection("dashboard")}><LayoutDashboard size={18}/> Monitoramento</button>
-          {String(authUser?.role || "").toUpperCase() === "ADMIN" && <button className={activeSection === "users" ? "active" : ""} onClick={() => setActiveSection("users")}><Users size={18}/> Usuários</button>}
-        </div>
-      </section>
-
-      {activeSection === "users" && <UsersPanel users={users} form={userForm} setForm={setUserForm} onCreate={createUser} onUpdate={updateUser} onDelete={deleteUser} loading={loading} authUser={authUser} />}
-
-      {activeSection === "dashboard" && <>
-
-      <section className="panel view-toolbar glass">
-        <div className="view-mode-buttons">
           <button
-            className={viewMode === "cards" ? "active" : ""}
-            onClick={() => setViewMode("cards")}
+            className={activeSection === "dashboard" ? "active" : ""}
+            onClick={() => setActiveSection("dashboard")}
           >
-            <LayoutDashboard size={18} /> Dashboard
+            <LayoutDashboard size={18} /> Monitoramento
           </button>
-          <button
-            className={viewMode === "list" ? "active" : ""}
-            onClick={() => setViewMode("list")}
-          >
-            <List size={18} /> Lista monitor
-          </button>
-        </div>
-        <div className="list-summary">
-          <span className="summary-ok">OK {severityCounts.healthy || 0}</span>
-          <span className="summary-warn">
-            Atenção {severityCounts.warning || 0}
-          </span>
-          <span className="summary-danger">
-            Crítico {severityCounts.critical || 0}
-          </span>
-          <span className="summary-off">
-            Offline {severityCounts.offline || 0}
-          </span>
-        </div>
-        <label className="search-box">
-          <Search size={16} />
-          <input
-            placeholder="Filtrar cliente, agent, host..."
-            value={clientFilter}
-            onChange={(e) => setClientFilter(e.target.value)}
-          />
-        </label>
-        <label>
-          Status
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-          >
-            <option value="all">Todos</option>
-            <option value="critical">Críticos</option>
-            <option value="warning">Atenção</option>
-            <option value="offline">Offline</option>
-            <option value="healthy">OK</option>
-          </select>
-        </label>
-        <label>
-          Densidade
-          <select value={density} onChange={(e) => setDensity(e.target.value)}>
-            <option value="compact">Compacta</option>
-            <option value="comfortable">Confortável</option>
-          </select>
-        </label>
-      </section>
-
-      <section className="kpi-grid">
-        <TopStat
-          icon={Server}
-          label="Agents online"
-          value={`${onlineCount}/${clients.length}`}
-          hint="Heartbeat < 2 minutos"
-          tone={onlineCount ? "green" : "red"}
-        />
-        <TopStat
-          icon={AlertTriangle}
-          label="Alertas críticos"
-          value={critical}
-          hint="Eventos ativos"
-          tone={critical ? "red" : "green"}
-        />
-        <TopStat
-          icon={Activity}
-          label="Sessões ativas"
-          value={compact(allActiveSessions, 0)}
-          hint="Total dos clientes"
-          tone="cyan"
-          spark={sessionSpark}
-        />
-        <TopStat
-          icon={Lock}
-          label="Locks em espera"
-          value={compact(totalLocks, 0)}
-          hint="Quanto menor melhor"
-          tone={totalLocks ? "red" : "green"}
-        />
-        <TopStat
-          icon={HardDrive}
-          label="Backup diário"
-          value={backupProblems}
-          hint="Falhas/atenções ativas"
-          tone={backupProblems ? "red" : "green"}
-        />
-        <TopStat
-          icon={HardDrive}
-          label="Tablespace máx."
-          value={`${compact(maxTablespace, 0)}%`}
-          hint="Maior uso encontrado"
-          tone={
-            pctClass(maxTablespace) === "danger"
-              ? "red"
-              : pctClass(maxTablespace) === "warn"
-                ? "yellow"
-                : "green"
-          }
-          spark={tsSpark}
-        />
-        <TopStat
-          icon={Cpu}
-          label="DB CPU"
-          value={`${compact(getLatestMetric(metrics, selected?.agentId, "DB_CPU_SECONDS") || selected?.dbCpuSeconds, 1)}s`}
-          hint={selected?.customerName || "Agent selecionado"}
-          tone="purple"
-          spark={cpuSpark}
-        />
-      </section>
-
-      {viewMode === "list" ? (
-        <ClientListView
-          clients={clients}
-          selectedAgent={selectedAgent}
-          onSelect={setSelectedAgent}
-          onDelete={setPendingDelete}
-          filterText={clientFilter}
-          statusFilter={statusFilter}
-          density={density}
-        />
-      ) : (
-        <section className="agent-strip">
-          {clients.length ? (
-            clients.map((c) => (
-              <AgentCard
-                key={c.agentId}
-                c={c}
-                selected={selected?.agentId === c.agentId}
-                onSelect={() => setSelectedAgent(c.agentId)}
-                onDelete={setPendingDelete}
-              />
-            ))
-          ) : (
-            <div className="panel empty">
-              Nenhum Agent enviou métricas ainda.
-            </div>
+          {canOpenUsers(authUser) && (
+            <button
+              className={activeSection === "users" ? "active" : ""}
+              onClick={() => setActiveSection("users")}
+            >
+              <Users size={18} /> Usuários
+            </button>
           )}
-        </section>
+        </div>
+      </section>
+
+      {activeSection === "users" && (
+        <UsersPanel
+          users={users}
+          form={userForm}
+          setForm={setUserForm}
+          onCreate={createUser}
+          onUpdate={updateUser}
+          onDelete={deleteUser}
+          loading={loading}
+          authUser={authUser}
+        />
       )}
 
-      <section className="overview-grid">
-        <div className="panel selected-panel">
-          <div className="section-title">
-            <h2>
-              <Database size={20} /> Agent selecionado
-            </h2>
-            <span>{selected?.agentId || "-"}</span>
-          </div>
-          {selected ? (
-            <div className="selected-content">
-              <div>
-                <h3>{selected.customerName || selected.agentId}</h3>
-                <p>
-                  {selected.host || "Host não informado"} •{" "}
-                  {selected.environment || "Ambiente"}
-                </p>
-                <Pill tone={ageOk(selected.lastSeenAt) ? "ok" : "warn"}>
-                  {ageOk(selected.lastSeenAt) ? "Online" : "Offline"}
-                </Pill>
-                <Pill tone={backupTone(selected)}>
-                  Backup {backupLabel(selected)}
-                </Pill>
-                <small>Último envio: {fmtDate(selected.lastSeenAt)}</small>
-                <small>
-                  Último backup:{" "}
-                  {selected.backupStatus?.latestModifiedAt
-                    ? fmtDate(selected.backupStatus.latestModifiedAt)
-                    : "-"}
-                </small>
-                <small>{selected.backupStatus?.message || ""}</small>
-              </div>
-              <div className="gauge-row">
-                <GaugeRing
-                  value={selected.maxTablespacePct}
-                  label="Tablespace"
-                  sublabel="uso máximo"
-                />
-                <GaugeRing
-                  value={Math.min(
-                    100,
-                    (n(selected.pgaAllocMb) /
-                      Math.max(
-                        n(selected.pgaLimitMb || selected.pgaTargetMb || 2048),
-                        1,
-                      )) *
-                      100,
-                  )}
-                  label="PGA"
-                  sublabel={`${compact(selected.pgaAllocMb)} MB`}
-                />
-                <GaugeRing
-                  value={Math.min(
-                    100,
-                    (n(selected.activeSessions) /
-                      Math.max(n(selected.sessionsLimit || 300), 1)) *
-                      100,
-                  )}
-                  label="Sessões"
-                  sublabel={`${compact(selected.activeSessions, 0)} ativas`}
-                />
-              </div>
+      {activeSection === "dashboard" && (
+        <>
+          <section className="panel view-toolbar glass">
+            <div className="view-mode-buttons">
+              <button
+                className={viewMode === "cards" ? "active" : ""}
+                onClick={() => setViewMode("cards")}
+              >
+                <LayoutDashboard size={18} /> Dashboard
+              </button>
+              <button
+                className={viewMode === "list" ? "active" : ""}
+                onClick={() => setViewMode("list")}
+              >
+                <List size={18} /> Lista monitor
+              </button>
             </div>
-          ) : (
-            <p className="empty">Selecione um Agent.</p>
-          )}
-        </div>
-        <DonutPanel
-          active={allActiveSessions}
-          inactive={allInactiveSessions}
-          blocked={allBlockedSessions}
-        />
-        <BarsPanel clients={clients} />
-      </section>
+            <div className="list-summary">
+              <span className="summary-ok">
+                OK {severityCounts.healthy || 0}
+              </span>
+              <span className="summary-warn">
+                Atenção {severityCounts.warning || 0}
+              </span>
+              <span className="summary-danger">
+                Crítico {severityCounts.critical || 0}
+              </span>
+              <span className="summary-off">
+                Offline {severityCounts.offline || 0}
+              </span>
+            </div>
+            <label className="search-box">
+              <Search size={16} />
+              <input
+                placeholder="Filtrar cliente, agent, host..."
+                value={clientFilter}
+                onChange={(e) => setClientFilter(e.target.value)}
+              />
+            </label>
+            <label>
+              Status
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                <option value="all">Todos</option>
+                <option value="critical">Críticos</option>
+                <option value="warning">Atenção</option>
+                <option value="offline">Offline</option>
+                <option value="healthy">OK</option>
+              </select>
+            </label>
+            <label>
+              Densidade
+              <select
+                value={density}
+                onChange={(e) => setDensity(e.target.value)}
+              >
+                <option value="compact">Compacta</option>
+                <option value="comfortable">Confortável</option>
+              </select>
+            </label>
+          </section>
 
-      <section className="charts-grid">
-        <AreaChart
-          rows={selectedMetrics}
-          metric="ACTIVE_SESSIONS"
-          title="Sessões ativas"
-          description="Tendência do Agent selecionado nas últimas amostras."
-        />
-        <AreaChart
-          rows={selectedMetrics}
-          metric="TABLESPACE_MAX_USED_PCT"
-          title="Uso máximo de tablespace"
-          description="Acompanhamento visual para risco de crescimento."
-          suffix="%"
-          maxHint={100}
-        />
-        <AreaChart
-          rows={selectedMetrics}
-          metric="LOCKS_WAITING"
-          title="Locks em espera"
-          description="Picos indicam contenção ou transações presas."
-        />
-        <AreaChart
-          rows={selectedMetrics}
-          metric="DB_TIME_SECONDS"
-          title="DB Time acumulado"
-          description="Tempo de banco acumulado reportado pelo Agent."
-          suffix="s"
-        />
-      </section>
-
-      <section className="two-cols">
-        <div className="panel">
-          <h2>
-            <TerminalSquare size={20} /> Executar script via Agent
-          </h2>
-          <p className="muted left">
-            A API enfileira a tarefa e o Agent executa localmente no servidor do
-            cliente.
-          </p>
-          <label className="field">
-            Agent
-            <select
-              value={effectiveAgentId}
-              onChange={(e) => setSelectedAgent(e.target.value)}
-            >
-              {clients.map((c) => (
-                <option key={c.agentId} value={c.agentId}>
-                  {c.customerName || c.agentId}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            SQL / Script
-            <textarea
-              value={sql}
-              onChange={(e) => setSql(e.target.value)}
-              rows={9}
+          <section className="kpi-grid">
+            <TopStat
+              icon={Server}
+              label="Agents online"
+              value={`${onlineCount}/${clients.length}`}
+              hint="Heartbeat < 2 minutos"
+              tone={onlineCount ? "green" : "red"}
             />
-          </label>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={allowDangerous}
-              onChange={(e) => setAllowDangerous(e.target.checked)}
-            />{" "}
-            Liberar comandos críticos nesta execução
-          </label>
-          <button onClick={queueScript} disabled={scriptLoading || !effectiveAgentId || !sql.trim()}>
-            <Play size={18} /> {scriptLoading ? "Enfileirando..." : "Enfileirar execução"}
-          </button>
-        </div>
-        <div className="panel">
-          <div className="panel-title-row">
-            <h2>
-              <Code2 size={20} /> Histórico de comandos
-            </h2>
-            <button
-              className="danger-button"
-              onClick={clearCommandHistory}
-              disabled={
-                loading ||
-                !commands.some(
-                  (cmd) => !["QUEUED", "IN_PROGRESS"].includes(cmd.status),
-                )
+            <TopStat
+              icon={AlertTriangle}
+              label="Alertas críticos"
+              value={critical}
+              hint="Eventos ativos"
+              tone={critical ? "red" : "green"}
+            />
+            <TopStat
+              icon={Activity}
+              label="Sessões ativas"
+              value={compact(allActiveSessions, 0)}
+              hint="Total dos clientes"
+              tone="cyan"
+              spark={sessionSpark}
+            />
+            <TopStat
+              icon={Lock}
+              label="Locks em espera"
+              value={compact(totalLocks, 0)}
+              hint="Quanto menor melhor"
+              tone={totalLocks ? "red" : "green"}
+            />
+            <TopStat
+              icon={HardDrive}
+              label="Backup diário"
+              value={backupProblems}
+              hint="Falhas/atenções ativas"
+              tone={backupProblems ? "red" : "green"}
+            />
+            <TopStat
+              icon={HardDrive}
+              label="Tablespace máx."
+              value={`${compact(maxTablespace, 0)}%`}
+              hint="Maior uso encontrado"
+              tone={
+                pctClass(maxTablespace) === "danger"
+                  ? "red"
+                  : pctClass(maxTablespace) === "warn"
+                    ? "yellow"
+                    : "green"
               }
-            >
-              <Trash2 size={18} /> Limpar histórico
-            </button>
-          </div>
-          <div className="commands">
-            {commands.length ? (
-              commands.map((cmd) => (
-                <details key={cmd.id} className="command">
-                  <summary>
-                    <span className={`pill ${statusClass(cmd.status)}`}>
-                      {cmd.status}
-                    </span>
-                    <strong>{cmd.agentId || "Todos agents"}</strong>
-                    <small>{fmtDate(cmd.createdAt)}</small>
-                  </summary>
-                  <div className="command-body">
-                    <p>{cmd.note}</p>
-                    <pre>{cmd.sql || "-"}</pre>
-                    {cmd.output && (
-                      <>
-                        <b>Output</b>
-                        <pre>{cmd.output}</pre>
-                      </>
-                    )}
-                    {cmd.error && (
-                      <>
-                        <b>Erro</b>
-                        <pre className="error-pre">{cmd.error}</pre>
-                      </>
-                    )}
-                  </div>
-                </details>
-              ))
-            ) : (
-              <p className="muted">Nenhum comando criado.</p>
-            )}
-          </div>
-        </div>
-      </section>
+              spark={tsSpark}
+            />
+            <TopStat
+              icon={Cpu}
+              label="DB CPU"
+              value={`${compact(getLatestMetric(metrics, selected?.agentId, "DB_CPU_SECONDS") || selected?.dbCpuSeconds, 1)}s`}
+              hint={selected?.customerName || "Agent selecionado"}
+              tone="purple"
+              spark={cpuSpark}
+            />
+          </section>
 
-      <section className="two-cols">
-        <div className="panel">
-          <h2>
-            <Gauge size={20} /> Métricas enterprise
-          </h2>
-          <div className="enterprise-grid">
-            {clients.slice(0, 6).map((c) => (
-              <div className="mini" key={c.agentId}>
-                <strong>{c.customerName || c.agentId}</strong>
-                <span>DB Time/s: {compact(c.dbTimePerSec)}</span>
-                <span>Logical Reads: {compact(c.logicalReads)}</span>
-                <span>Physical Reads: {compact(c.physicalReads)}</span>
-                <span>Execuções: {compact(c.executions)}</span>
-                <span>Parse Count: {compact(c.parseCountTotal)}</span>
-                <span>Redo: {compact(c.redoMbPerMin)} MB/min</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="panel">
-          <h2>
-            <BellRing size={20} /> Alertas
-          </h2>
-          {alerts.length ? (
-            alerts.map((a, i) => (
-              <div className={`alert ${a.level}`} key={i}>
-                {a.message}
-              </div>
-            ))
+          {viewMode === "list" ? (
+            <ClientListView
+              clients={clients}
+              selectedAgent={selectedAgent}
+              onSelect={setSelectedAgent}
+              onDelete={setPendingDelete}
+              filterText={clientFilter}
+              statusFilter={statusFilter}
+              density={density}
+            />
           ) : (
-            <p className="muted">
-              <CheckCircle2 size={16} /> Nenhum alerta ativo.
-            </p>
+            <section className="agent-strip">
+              {clients.length ? (
+                clients.map((c) => (
+                  <AgentCard
+                    key={c.agentId}
+                    c={c}
+                    selected={selected?.agentId === c.agentId}
+                    onSelect={() => setSelectedAgent(c.agentId)}
+                    onDelete={setPendingDelete}
+                  />
+                ))
+              ) : (
+                <div className="panel empty">
+                  Nenhum Agent enviou métricas ainda.
+                </div>
+              )}
+            </section>
           )}
-          <h3>Histórico</h3>
-          {alertHistory.slice(0, 8).map((a) => (
-            <div className={`alert ${a.level}`} key={a.id}>
-              {fmtDate(a.at)} — {a.message}
+
+          <section className="overview-grid">
+            <div className="panel selected-panel">
+              <div className="section-title">
+                <h2>
+                  <Database size={20} /> Agent selecionado
+                </h2>
+                <span>{selected?.agentId || "-"}</span>
+              </div>
+              {selected ? (
+                <div className="selected-content">
+                  <div>
+                    <h3>{selected.customerName || selected.agentId}</h3>
+                    <p>
+                      {selected.host || "Host não informado"} •{" "}
+                      {selected.environment || "Ambiente"}
+                    </p>
+                    <Pill tone={ageOk(selected.lastSeenAt) ? "ok" : "warn"}>
+                      {ageOk(selected.lastSeenAt) ? "Online" : "Offline"}
+                    </Pill>
+                    <Pill tone={backupTone(selected)}>
+                      Backup {backupLabel(selected)}
+                    </Pill>
+                    <small>Último envio: {fmtDate(selected.lastSeenAt)}</small>
+                    <small>
+                      Último backup:{" "}
+                      {selected.backupStatus?.latestModifiedAt
+                        ? fmtDate(selected.backupStatus.latestModifiedAt)
+                        : "-"}
+                    </small>
+                    <small>{selected.backupStatus?.message || ""}</small>
+                  </div>
+                  <div className="gauge-row">
+                    <GaugeRing
+                      value={selected.maxTablespacePct}
+                      label="Tablespace"
+                      sublabel="uso máximo"
+                    />
+                    <GaugeRing
+                      value={Math.min(
+                        100,
+                        (n(selected.pgaAllocMb) /
+                          Math.max(
+                            n(
+                              selected.pgaLimitMb ||
+                                selected.pgaTargetMb ||
+                                2048,
+                            ),
+                            1,
+                          )) *
+                          100,
+                      )}
+                      label="PGA"
+                      sublabel={`${compact(selected.pgaAllocMb)} MB`}
+                    />
+                    <GaugeRing
+                      value={Math.min(
+                        100,
+                        (n(selected.activeSessions) /
+                          Math.max(n(selected.sessionsLimit || 300), 1)) *
+                          100,
+                      )}
+                      label="Sessões"
+                      sublabel={`${compact(selected.activeSessions, 0)} ativas`}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <p className="empty">Selecione um Agent.</p>
+              )}
             </div>
-          ))}
-        </div>
-      </section>
+            <DonutPanel
+              active={allActiveSessions}
+              inactive={allInactiveSessions}
+              blocked={allBlockedSessions}
+            />
+            <BarsPanel clients={clients} />
+          </section>
 
-      <section className="panel raw-panel">
-        <h2>
-          <ShieldCheck size={20} /> Últimas métricas recebidas
-        </h2>
-        <pre>
-          {metrics.length
-            ? JSON.stringify(metrics.slice(0, 3), null, 2)
-            : "Sem métricas."}
-        </pre>
-      </section>
+          <section className="charts-grid">
+            <AreaChart
+              rows={selectedMetrics}
+              metric="ACTIVE_SESSIONS"
+              title="Sessões ativas"
+              description="Tendência do Agent selecionado nas últimas amostras."
+            />
+            <AreaChart
+              rows={selectedMetrics}
+              metric="TABLESPACE_MAX_USED_PCT"
+              title="Uso máximo de tablespace"
+              description="Acompanhamento visual para risco de crescimento."
+              suffix="%"
+              maxHint={100}
+            />
+            <AreaChart
+              rows={selectedMetrics}
+              metric="LOCKS_WAITING"
+              title="Locks em espera"
+              description="Picos indicam contenção ou transações presas."
+            />
+            <AreaChart
+              rows={selectedMetrics}
+              metric="DB_TIME_SECONDS"
+              title="DB Time acumulado"
+              description="Tempo de banco acumulado reportado pelo Agent."
+              suffix="s"
+            />
+          </section>
 
-      </>}
+          <section className="two-cols">
+            <div className="panel">
+              <h2>
+                <TerminalSquare size={20} /> Executar script via Agent
+              </h2>
+              <p className="muted left">
+                A API enfileira a tarefa e o Agent executa localmente no
+                servidor do cliente.
+              </p>
+              <label className="field">
+                Agent
+                <select
+                  value={effectiveAgentId}
+                  onChange={(e) => setSelectedAgent(e.target.value)}
+                >
+                  {clients.map((c) => (
+                    <option key={c.agentId} value={c.agentId}>
+                      {c.customerName || c.agentId}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                SQL / Script
+                <textarea
+                  value={sql}
+                  onChange={(e) => setSql(e.target.value)}
+                  rows={9}
+                />
+              </label>
+              {hasPermission(authUser, "EXECUTE_CRITICAL") ? (
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={allowDangerous}
+                    onChange={(e) => setAllowDangerous(e.target.checked)}
+                  />{" "}
+                  Liberar comandos críticos nesta execução
+                </label>
+              ) : (
+                <p className="muted left">
+                  Seu perfil não permite comandos críticos.
+                </p>
+              )}
+              <button
+                onClick={queueScript}
+                disabled={
+                  scriptLoading ||
+                  !effectiveAgentId ||
+                  !sql.trim() ||
+                  !canQueueAnyScript(authUser)
+                }
+              >
+                <Play size={18} />{" "}
+                {scriptLoading ? "Enfileirando..." : "Enfileirar execução"}
+              </button>
+            </div>
+            <div className="panel">
+              <div className="panel-title-row">
+                <h2>
+                  <Code2 size={20} /> Histórico de comandos
+                </h2>
+                <button
+                  className="danger-button"
+                  onClick={clearCommandHistory}
+                  disabled={
+                    loading ||
+                    !commands.some(
+                      (cmd) => !["QUEUED", "IN_PROGRESS"].includes(cmd.status),
+                    )
+                  }
+                >
+                  <Trash2 size={18} /> Limpar histórico
+                </button>
+              </div>
+              <div className="commands">
+                {commands.length ? (
+                  commands.map((cmd) => (
+                    <details key={cmd.id} className="command">
+                      <summary>
+                        <span className={`pill ${statusClass(cmd.status)}`}>
+                          {cmd.status}
+                        </span>
+                        <strong>{cmd.agentId || "Todos agents"}</strong>
+                        <small>{fmtDate(cmd.createdAt)}</small>
+                      </summary>
+                      <div className="command-body">
+                        <p>{cmd.note}</p>
+                        <pre>{cmd.sql || "-"}</pre>
+                        {cmd.output && (
+                          <>
+                            <b>Output</b>
+                            <pre>{cmd.output}</pre>
+                          </>
+                        )}
+                        {cmd.error && (
+                          <>
+                            <b>Erro</b>
+                            <pre className="error-pre">{cmd.error}</pre>
+                          </>
+                        )}
+                      </div>
+                    </details>
+                  ))
+                ) : (
+                  <p className="muted">Nenhum comando criado.</p>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="two-cols">
+            <div className="panel">
+              <h2>
+                <Gauge size={20} /> Métricas enterprise
+              </h2>
+              <div className="enterprise-grid">
+                {clients.slice(0, 6).map((c) => (
+                  <div className="mini" key={c.agentId}>
+                    <strong>{c.customerName || c.agentId}</strong>
+                    <span>DB Time/s: {compact(c.dbTimePerSec)}</span>
+                    <span>Logical Reads: {compact(c.logicalReads)}</span>
+                    <span>Physical Reads: {compact(c.physicalReads)}</span>
+                    <span>Execuções: {compact(c.executions)}</span>
+                    <span>Parse Count: {compact(c.parseCountTotal)}</span>
+                    <span>Redo: {compact(c.redoMbPerMin)} MB/min</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="panel">
+              <h2>
+                <BellRing size={20} /> Alertas
+              </h2>
+              {alerts.length ? (
+                alerts.map((a, i) => (
+                  <div className={`alert ${a.level}`} key={i}>
+                    {a.message}
+                  </div>
+                ))
+              ) : (
+                <p className="muted">
+                  <CheckCircle2 size={16} /> Nenhum alerta ativo.
+                </p>
+              )}
+              <h3>Histórico</h3>
+              {alertHistory.slice(0, 8).map((a) => (
+                <div className={`alert ${a.level}`} key={a.id}>
+                  {fmtDate(a.at)} — {a.message}
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel raw-panel">
+            <h2>
+              <ShieldCheck size={20} /> Últimas métricas recebidas
+            </h2>
+            <pre>
+              {metrics.length
+                ? JSON.stringify(metrics.slice(0, 3), null, 2)
+                : "Sem métricas."}
+            </pre>
+          </section>
+        </>
+      )}
 
       {pendingDelete && (
         <div className="modal-backdrop" onClick={() => setPendingDelete(null)}>
