@@ -2103,3 +2103,28 @@ main.login-page {
   .user-form-grid { grid-template-columns: 1fr; }
   .user-form-grid .field:nth-child(n) { grid-column: auto; }
 }
+
+/* v3.3.23 - Ajuste final da tela de login com autenticação por banco */
+main.login-page .login-shell {
+  margin: auto;
+}
+
+main.login-page .login-card {
+  min-width: 0;
+}
+
+main.login-page .login-form,
+main.login-page .login-field,
+main.login-page .input-wrap {
+  width: 100%;
+}
+
+main.login-page .login-submit:disabled,
+main.login-page .password-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+main.login-page .login-status span {
+  overflow-wrap: anywhere;
+}

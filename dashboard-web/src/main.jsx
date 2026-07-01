@@ -26,6 +26,9 @@ import {
   UserPlus,
   Save,
   X,
+  Eye,
+  EyeOff,
+  User,
 } from "lucide-react";
 import "./styles.css";
 
@@ -799,51 +802,110 @@ function LoginScreen({ apiUrl, setApiUrl, onLogin, message, loading }) {
     localStorage.getItem("dashboardUser") || "admin",
   );
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+
+  function submitLogin(e) {
+    e.preventDefault();
+    if (!loading) onLogin(username.trim(), password);
+  }
+
   return (
     <main className="login-page">
-      <section className="login-card glass">
-        <div className="login-brand">
-          <ShieldCheck size={34} />
-          <div>
-            <p className="eyebrow">Oracle DBA Platform</p>
-            <h1>Login do Dashboard</h1>
-            <p>Acesse o monitoramento web usando o usuário da Central API.</p>
+      <section className="login-shell">
+        <aside className="login-info" aria-hidden="true">
+          <div className="login-info-icon">
+            <Database size={34} />
           </div>
-        </div>
-        <label>
-          URL da API Central
-          <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} />
-        </label>
-        <label>
-          Usuário
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="username"
-          />
-        </label>
-        <label>
-          Senha
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            onKeyDown={(e) => {
-              if (e.key === "Enter") onLogin(username, password);
-            }}
-          />
-        </label>
-        <button disabled={loading} onClick={() => onLogin(username, password)}>
-          <Lock size={18} /> Entrar
-        </button>
-        <div className="status">
-          <strong>Status:</strong> {message}
-        </div>
-        <small className="login-help">
-          Configure no Railway/Central API: DASHBOARD_ADMIN_USER e
-          DASHBOARD_ADMIN_PASSWORD.
-        </small>
+          <p className="eyebrow">Oracle DBA Platform</p>
+          <h1>Administração Oracle centralizada e segura</h1>
+          <p>
+            Monitore clientes, acompanhe métricas e execute rotinas DBA com
+            autenticação baseada no banco de dados da Central API.
+          </p>
+          <div className="login-oracle-art">
+            <div className="server-box left" />
+            <div className="db-cylinder" />
+            <div className="server-box right" />
+            <div className="pulse-line" />
+          </div>
+        </aside>
+
+        <section className="login-card">
+          <div className="login-brand">
+            <ShieldCheck size={34} />
+            <div>
+              <p className="eyebrow">Acesso seguro</p>
+              <h2>Login do Dashboard</h2>
+              <p>Entre com seu usuário cadastrado na plataforma.</p>
+            </div>
+          </div>
+
+          <form className="login-form" onSubmit={submitLogin}>
+            <label className="login-field">
+              URL da API Central
+              <span className="input-wrap">
+                <Server size={18} />
+                <input
+                  value={apiUrl}
+                  onChange={(e) => setApiUrl(e.target.value)}
+                  placeholder="https://central-api..."
+                  autoComplete="url"
+                />
+              </span>
+            </label>
+
+            <label className="login-field">
+              Usuário
+              <span className="input-wrap">
+                <User size={18} />
+                <input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="admin"
+                  autoComplete="username"
+                  autoFocus
+                />
+              </span>
+            </label>
+
+            <label className="login-field">
+              Senha
+              <span className="input-wrap">
+                <Lock size={18} />
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Digite sua senha"
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  className="password-toggle"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                  title={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </span>
+            </label>
+
+            <button className="login-submit" disabled={loading} type="submit">
+              <Lock size={18} /> {loading ? "Entrando..." : "Entrar"}
+            </button>
+          </form>
+
+          <div className="login-status">
+            <CheckCircle2 size={18} />
+            <span>{message || "Informe usuário e senha para acessar."}</span>
+          </div>
+
+          <small className="login-help">
+            Autenticação baseada no banco da Central API. Desenvolvido por J S
+            Moreira • v{VERSION}
+          </small>
+        </section>
       </section>
     </main>
   );
