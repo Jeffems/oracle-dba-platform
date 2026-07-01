@@ -46,8 +46,6 @@ const PORT = Number(
     4090,
 );
 const TOKEN = process.env.CENTRAL_API_TOKEN || "dev-token-change-me";
-const DASHBOARD_USER = process.env.DASHBOARD_ADMIN_USER || "admin";
-const DASHBOARD_PASSWORD = process.env.DASHBOARD_ADMIN_PASSWORD || "admin123";
 const DASHBOARD_SESSION_SECRET =
   process.env.DASHBOARD_SESSION_SECRET || TOKEN || "dev-dashboard-secret";
 const DASHBOARD_SESSION_TTL_MS = Math.max(
@@ -55,7 +53,7 @@ const DASHBOARD_SESSION_TTL_MS = Math.max(
   Number(process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000),
 );
 const dashboardSessions = new Map();
-const VERSION = "3.3.14";
+const VERSION = "3.3.19";
 const startedAt = Date.now();
 const sseClients = new Set();
 const LOG_DIR = path.join(process.cwd(), "logs");
@@ -122,11 +120,13 @@ function signSessionPayload(payload) {
     .update(payload)
     .digest("base64url");
 }
-function createDashboardSession(username) {
+function createDashboardSession(user) {
   const now = Date.now();
   const session = {
     sid: crypto.randomUUID(),
-    username,
+    userId: user.id,
+    username: user.username,
+    role: user.role,
     createdAt: now,
     expiresAt: now + DASHBOARD_SESSION_TTL_MS,
   };
@@ -154,9 +154,9 @@ function verifyDashboardSession(token) {
 }
 function auth(req) {
   const bearer = getBearer(req);
-  if (safeEqual(bearer, TOKEN)) return { type: "api-token", username: "agent-or-api" };
+  if (safeEqual(bearer, TOKEN)) return { type: "api-token", username: "agent-or-api", role: "SYSTEM" };
   const session = verifyDashboardSession(bearer);
-  if (session) return { type: "dashboard", username: session.username };
+  if (session) return { type: "dashboard", userId: session.userId || null, username: session.username, role: session.role || "ADMIN" };
   return null;
 }
 function readJson(req) {
@@ -200,6 +200,68 @@ function secondsBetween(a, b) {
 function round2(v) {
   const n = Number(v || 0);
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+}
+
+const PASSWORD_ALGO = "scrypt";
+const PASSWORD_KEYLEN = 64;
+const PASSWORD_SALT_BYTES = 16;
+const PASSWORD_COST = 16384;
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(PASSWORD_SALT_BYTES).toString("base64url");
+  const hash = crypto
+    .scryptSync(String(password || ""), salt, PASSWORD_KEYLEN, { N: PASSWORD_COST })
+    .toString("base64url");
+  return `${PASSWORD_ALGO}$${PASSWORD_COST}$${salt}$${hash}`;
+}
+function verifyPassword(password, storedHash) {
+  try {
+    const [algo, cost, salt, hash] = String(storedHash || "").split("$");
+    if (algo !== PASSWORD_ALGO || !cost || !salt || !hash) return false;
+    const candidate = crypto
+      .scryptSync(String(password || ""), salt, PASSWORD_KEYLEN, { N: Number(cost) })
+      .toString("base64url");
+    return safeEqual(candidate, hash);
+  } catch {
+    return false;
+  }
+}
+function normalizeUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    active: user.active,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+    lastLoginAt: user.lastLoginAt,
+  };
+}
+function isAdmin(authUser) {
+  return String(authUser?.role || "").toUpperCase() === "ADMIN";
+}
+async function bootstrapDashboardAdmin() {
+  const count = await prisma.dashboardUser.count();
+  if (count > 0) return;
+  const username = String(process.env.DASHBOARD_ADMIN_USER || "admin").trim();
+  const password = String(process.env.DASHBOARD_ADMIN_PASSWORD || "");
+  if (!password) {
+    log("warn", "dashboard.bootstrap.skipped", {
+      message: "Nenhum usuário do dashboard existe. Configure DASHBOARD_ADMIN_PASSWORD uma vez para criar o primeiro admin.",
+    });
+    return;
+  }
+  const user = await prisma.dashboardUser.create({
+    data: {
+      username,
+      passwordHash: hashPassword(password),
+      role: "ADMIN",
+      active: true,
+    },
+  });
+  await audit("dashboard.user.bootstrap", { user: normalizeUser(user) });
+  log("info", "dashboard.bootstrap.created", { username });
 }
 
 function normalizeBackupStatus(snapshot) {
@@ -539,16 +601,28 @@ const server = http.createServer(async (req, res) => {
       const password = String(body.password || "");
       if (!username || !password)
         return send(res, 400, { ok: false, message: "Informe usuário e senha." });
-      if (!safeEqual(username, DASHBOARD_USER) || !safeEqual(password, DASHBOARD_PASSWORD)) {
+
+      const user = await prisma.dashboardUser.findUnique({ where: { username } });
+      if (!user || !user.active || !verifyPassword(password, user.passwordHash)) {
         await audit("auth.login.failed", { username, ip: req.socket?.remoteAddress || null });
         return send(res, 401, { ok: false, message: "Usuário ou senha inválidos." });
       }
-      const token = createDashboardSession(username);
-      await audit("auth.login.success", { username, ip: req.socket?.remoteAddress || null });
+
+      const updatedUser = await prisma.dashboardUser.update({
+        where: { id: user.id },
+        data: { lastLoginAt: new Date() },
+      });
+      const token = createDashboardSession(updatedUser);
+      await audit("auth.login.success", {
+        userId: updatedUser.id,
+        username: updatedUser.username,
+        role: updatedUser.role,
+        ip: req.socket?.remoteAddress || null,
+      });
       return send(res, 200, {
         ok: true,
         token,
-        user: { username },
+        user: normalizeUser(updatedUser),
         expiresInMs: DASHBOARD_SESSION_TTL_MS,
       });
     }
@@ -566,8 +640,70 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && pathname === "/api/auth/me") {
       return send(res, 200, {
         ok: true,
-        user: { username: authUser.username, type: authUser.type },
+        user: {
+          id: authUser.userId || null,
+          username: authUser.username,
+          role: authUser.role,
+          type: authUser.type,
+        },
       });
+    }
+    if (req.method === "GET" && pathname === "/api/users") {
+      if (!isAdmin(authUser))
+        return send(res, 403, { ok: false, message: "Apenas ADMIN pode listar usuários." });
+      const rows = await prisma.dashboardUser.findMany({
+        orderBy: { createdAt: "asc" },
+      });
+      return send(res, 200, { ok: true, rows: rows.map(normalizeUser) });
+    }
+    if (req.method === "POST" && pathname === "/api/users") {
+      if (!isAdmin(authUser))
+        return send(res, 403, { ok: false, message: "Apenas ADMIN pode criar usuários." });
+      const body = await readJson(req);
+      const username = String(body.username || "").trim();
+      const password = String(body.password || "");
+      const role = String(body.role || "DBA").trim().toUpperCase();
+      if (!username || !password)
+        return send(res, 400, { ok: false, message: "Informe usuário e senha." });
+      if (password.length < 8)
+        return send(res, 400, { ok: false, message: "A senha deve ter no mínimo 8 caracteres." });
+      const user = await prisma.dashboardUser.create({
+        data: {
+          username,
+          passwordHash: hashPassword(password),
+          role,
+          active: body.active === undefined ? true : Boolean(body.active),
+        },
+      });
+      await audit("dashboard.user.create", {
+        by: authUser.username,
+        user: normalizeUser(user),
+      });
+      return send(res, 201, { ok: true, user: normalizeUser(user) });
+    }
+    if (req.method === "PATCH" && req.url?.startsWith("/api/users/")) {
+      if (!isAdmin(authUser))
+        return send(res, 403, { ok: false, message: "Apenas ADMIN pode alterar usuários." });
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const userId = decodeURIComponent(url.pathname.replace("/api/users/", "")).trim();
+      const body = await readJson(req);
+      const data = {};
+      if (body.password) {
+        const password = String(body.password);
+        if (password.length < 8)
+          return send(res, 400, { ok: false, message: "A senha deve ter no mínimo 8 caracteres." });
+        data.passwordHash = hashPassword(password);
+      }
+      if (body.role !== undefined) data.role = String(body.role || "DBA").trim().toUpperCase();
+      if (body.active !== undefined) data.active = Boolean(body.active);
+      if (!Object.keys(data).length)
+        return send(res, 400, { ok: false, message: "Nenhuma alteração informada." });
+      const user = await prisma.dashboardUser.update({ where: { id: userId }, data });
+      await audit("dashboard.user.update", {
+        by: authUser.username,
+        user: normalizeUser(user),
+      });
+      return send(res, 200, { ok: true, user: normalizeUser(user) });
     }
     if (req.method === "GET" && pathname === "/api/realtime") {
       res.writeHead(200, {
@@ -849,10 +985,14 @@ process.on("SIGTERM", async () => {
   await prisma.$disconnect();
   process.exit(0);
 });
-server.listen(PORT, "0.0.0.0", () => {
-  log("info", `Oracle DBA Central API v${VERSION} rodando`, {
-    url: `http://0.0.0.0:${PORT}`,
-    port: PORT,
-    logFile: LOG_FILE,
+bootstrapDashboardAdmin()
+  .catch((err) => log("error", "dashboard.bootstrap.failed", { error: err.message }))
+  .finally(() => {
+    server.listen(PORT, "0.0.0.0", () => {
+      log("info", `Oracle DBA Central API v${VERSION} rodando`, {
+        url: `http://0.0.0.0:${PORT}`,
+        port: PORT,
+        logFile: LOG_FILE,
+      });
+    });
   });
-});

@@ -80,3 +80,19 @@ model AuditLog {
 
   @@index([action, createdAt])
 }
+
+
+model DashboardUser {
+  id           String    @id @default(uuid())
+  username     String    @unique
+  passwordHash String
+  role         String    @default("ADMIN")
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastLoginAt  DateTime?
+
+  @@index([username])
+  @@index([role])
+  @@index([active])
+}
