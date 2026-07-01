@@ -699,7 +699,7 @@ function LoginScreen({ apiUrl, setApiUrl, onLogin, message, loading }) {
             </label>
 
             <button className="login-submit" disabled={loading} onClick={submitLogin}>
-              <Lock size={18} /> {loading ? "Entrando..." : "Entrar"}
+               {loading ? "Entrando..." : "Entrar"}
             </button>
           </div>
 
@@ -708,9 +708,7 @@ function LoginScreen({ apiUrl, setApiUrl, onLogin, message, loading }) {
             <span><strong>Status:</strong> {message}</span>
           </div>
 
-          <small className="login-help">
-            Configure no Railway/Central API: DASHBOARD_ADMIN_USER e DASHBOARD_ADMIN_PASSWORD.
-          </small>
+         
         </section>
       </section>
     </main>
