@@ -639,7 +639,7 @@ function LoginScreen({ apiUrl, setApiUrl, onLogin, message, loading }) {
 
         <section className="login-card">
           <div className="login-brand">
-            <ShieldCheck size={32} />
+           
             <div>
               <h2>Login do Dashboard</h2>
               <p>Informe suas credenciais para acessar o painel.</p>
